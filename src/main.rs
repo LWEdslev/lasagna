@@ -3,7 +3,8 @@ use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::pss::{Signature, SigningKey, VerifyingKey};
 use rsa::sha2::{Digest, Sha256};
 use rsa::signature::{Keypair, RandomizedSigner, SignatureEncoding, Verifier};
-use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
+use rsa::{RsaPrivateKey, RsaPublicKey};
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -126,6 +127,7 @@ pub struct Block {
     depth: u64,
     winner: Address,
     transactions: Vec<Transaction>,
+    draw: Draw,
     signature: Signature,
     hash: [u8; 32],
 }
@@ -146,13 +148,14 @@ impl Block {
         hasher.update(fields_string.as_bytes());
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         let signature = sk.sign_with_rng(&mut rng, &hash);
-
+        let draw = Draw::new(timeslot, winner.clone(), &sk, prev_hash);
         Self {
             timeslot,
             prev_hash,
             depth,
             winner,
             transactions,
+            draw,
             signature,
             hash,
         }
@@ -172,6 +175,10 @@ impl Block {
         hash == self.hash && self.winner.verify(&hash, &self.signature).is_ok()
     }
 
+    fn verify_winner(&self) -> bool {
+        todo!("check draw and winner and signature")
+    }
+
     fn combine_fields_to_string(
         timeslot: &Timeslot,
         prev_hash: &[u8; 32],
@@ -184,7 +191,26 @@ impl Block {
     }
 
     fn increment_timestamp(&mut self) {
-        todo!()
+        self.timeslot += 1;
+    }
+
+    fn set_draw(&mut self, sk: &SigningKey<Sha256>) {
+        self.draw = Draw::new(self.timeslot, self.winner.clone(), sk, self.prev_hash);
+    }
+    
+    fn sign_and_rehash(&mut self, sk: &SigningKey<Sha256>) {
+        let fields_string = Block::combine_fields_to_string(
+            &self.timeslot,
+            &self.prev_hash,
+            self.depth,
+            &self.winner,
+            &self.transactions,
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(fields_string.as_bytes());
+        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        self.hash = hash;
+        self.signature = sk.sign_with_rng(&mut thread_rng(), &hash);
     }
 }
 
@@ -200,14 +226,16 @@ pub struct Draw {
     timeslot: Timeslot,
     signature: Signature,
     signed_by: Address,
+    prev_hash: [u8; 32],
 }
 
 impl Draw {
-    pub fn new(timeslot: Timeslot, vk: Address, sk: &SigningKey<Sha256>) -> Self {
+    pub fn new(timeslot: Timeslot, vk: Address, sk: &SigningKey<Sha256>, prev_hash: [u8; 32]) -> Self {
         let data = format!("Lottery{timeslot}");
         let mut rng = thread_rng();
         let mut hasher = Sha256::new();
         hasher.update(data.as_bytes());
+        hasher.update(prev_hash);
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         let signature = sk.sign_with_rng(&mut rng, &hash);
 
@@ -221,6 +249,7 @@ impl Draw {
             timeslot,
             signature,
             signed_by: vk,
+            prev_hash,
         }
     }
 
@@ -230,6 +259,7 @@ impl Draw {
         let data = format!("Lottery{timeslot}");
         let mut hasher = Sha256::new();
         hasher.update(data.as_bytes());
+        hasher.update(self.prev_hash);
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         vk.verify(&hash, &self.signature).is_ok()
     }
@@ -304,15 +334,15 @@ impl Ledger {
     }
 
     pub fn get_total_money_in_ledger(&self) -> u64 {
-        todo!()
+        self.map.values().sum()
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Blockchain {
     blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block TODO encapsulate
-    best_path_head: ([u8; 32], u64),  // the hash and depth of the head of the current best path
-    ledger: Ledger,                   // this should follow the best_path_heads state
+    best_path_head: ([u8; 32], u64), // the hash and depth of the head of the current best path
+    ledger: Ledger,                  // this should follow the best_path_heads state
     root_accounts: Vec<RsaPublicKey>,
     orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks TODO encapsulate this
     transaction_buffer: Vec<Transaction>,
@@ -357,11 +387,14 @@ impl Blockchain {
 
     /// Returns whether the new block extends the best path
     pub fn add_block(&mut self, block: Block) -> bool {
-        if !block.verify_signature() { println!("signature invalid"); return false }
+        if !block.verify_signature() {
+            dbg!("signature invalid");
+            return false;
+        }
         let depth = block.depth as usize;
         while depth >= self.blocks.len() {
             // create empty hashmaps if the block is in the future, this will usually just be done once
-            self.blocks.push(HashMap::new()); 
+            self.blocks.push(HashMap::new());
         }
         let get_parent = |parent_hash: [u8; 32]| {
             let map = self.blocks.get(depth - 1)?;
@@ -382,27 +415,30 @@ impl Blockchain {
         };
 
         // clone the stuff we need later
-        let block_hash = block.hash.clone(); 
+        let block_hash = block.hash.clone();
         // we add ourself
-        self.blocks.get_mut(depth).expect("unreachable").insert(block.hash.clone(), block.clone());
+        self.blocks
+            .get_mut(depth)
+            .expect("unreachable")
+            .insert(block.hash.clone(), block.clone());
 
         // we check if this is the new best path
         let (old_best_path, old_depth) = self.best_path_head;
 
         if depth > old_depth as _ {
             // this is definetely the new best path
-                self.best_path_head = (block_hash, depth as _);
-                
-                // rollback if we changed branch 
-                if old_best_path != parent_hash {
-                    println!("rollback 1");
-                    self.rollback((old_best_path, old_depth), (block_hash, depth as _));
-                } else {
-                    self.proccess_transactions(&block.transactions);
-                }
+            self.best_path_head = (block_hash, depth as _);
+
+            // rollback if we changed branch
+            if old_best_path != parent_hash {
+                println!("rollback 1");
+                self.rollback((old_best_path, old_depth), (block_hash, depth as _));
+            } else {
+                self.proccess_transactions(&block.transactions);
+            }
         } else if depth == self.best_path_head.1 as usize {
             println!("equal depth");
-            // the tiebreaker is who has the lexicographically highest hex hash 
+            // the tiebreaker is who has the lexicographically highest hex hash
             // TODO add timestamp and len(transactions) tiebreaker
             let new_hash = hex::encode(block_hash.clone());
             let curr_best_hash = hex::encode(self.best_path_head.0.clone());
@@ -429,11 +465,14 @@ impl Blockchain {
 
     pub fn rollback(&mut self, from: ([u8; 32], u64), to: ([u8; 32], u64)) {
         let get_block = |hash: &[u8; 32], depth: u64| {
-            self.blocks.get(depth as usize).and_then(|m| m.get(hash)).unwrap()
+            self.blocks
+                .get(depth as usize)
+                .and_then(|m| m.get(hash))
+                .unwrap()
         };
 
         let mut from_ptr = get_block(&from.0, from.1);
-        let mut to_ptr =  get_block(&to.0, to.1);
+        let mut to_ptr = get_block(&to.0, to.1);
         let mut track_stack = Vec::new();
         while from_ptr != to_ptr {
             track_stack.push((to_ptr.hash, to_ptr.depth));
@@ -450,14 +489,15 @@ impl Blockchain {
             let old_to_ptr_depth = to_ptr.depth;
             to_ptr = get_block(to_parent_hash, to_parent_depth);
 
-            if old_to_ptr_depth == from_ptr.depth { // to_depth is always >= from_depth so we have to ensure that to goes back first
+            if old_to_ptr_depth == from_ptr.depth {
+                // to_depth is always >= from_depth so we have to ensure that to goes back first
                 // we roll back the transactions on the from path
                 for t in from_ptr.transactions.iter() {
                     self.ledger.rollback_transaction(t);
-                    println!("rolling back t");
                 }
 
-                let (from_parent_hash, from_parent_depth) = (&from_ptr.prev_hash, from_ptr.depth - 1);
+                let (from_parent_hash, from_parent_depth) =
+                    (&from_ptr.prev_hash, from_ptr.depth - 1);
                 from_ptr = get_block(from_parent_hash, from_parent_depth);
             }
         }
@@ -472,20 +512,17 @@ impl Blockchain {
         }
     }
 
-    pub fn stake(&self, block: &mut Block, wallet: &RsaPublicKey) -> bool {
+    /// Simply checks if you've won
+    pub fn stake(&self, block: &Block, wallet: &RsaPublicKey) -> bool {
         let balance = self.ledger.get_balance(&wallet);
         let total_money = self.ledger.get_total_money_in_ledger();
-        block.increment_timestamp();
-
-        let hash = block.hash;
-        let hash_i = BigUint::from_bytes_be(&hash);
         
-        let hardness = BigUint::from(0 as u64); // TODO replace with a better value
+        let hardness = BigUint::from(2800u64) * BigUint::from(10u64).pow(73);
 
-        // We win if we have a good hash and a big enough fraction of the money
-        hash_i * (BigUint::from(balance)) > hardness * BigUint::from(total_money)
+        // We win if we have a good draw and a big enough fraction of the money
+        block.draw.value.clone() * (BigUint::from(balance)) > hardness * BigUint::from(total_money)
     }
-    
+
     fn proccess_transactions(&mut self, transactions: &Vec<Transaction>) {
         for t in transactions.iter() {
             self.ledger.process_transaction(t); // an optimization is not verifying the transaction here
@@ -501,10 +538,10 @@ mod tests {
     fn test_draw_verify() {
         let (sk, vk) = generate_keypair();
         let (_, vk2) = generate_keypair();
-        let draw = Draw::new(0, vk.clone(), &sk);
+        let draw = Draw::new(0, vk.clone(), &sk, [0; 32]);
         assert!(draw.verify());
 
-        let draw = Draw::new(0, vk2.clone(), &sk);
+        let draw = Draw::new(0, vk2.clone(), &sk, [0; 32]);
         assert!(!draw.verify());
     }
 
@@ -599,60 +636,129 @@ mod tests {
 
         // _b1_1 refers to branch 1, depth 1
 
-        let mut blockchain = Blockchain::start(vec![vk1.clone().into(), vk2.clone().into(), vk3.clone().into(), vk4.clone().into()], &sk1);
+        let mut blockchain = Blockchain::start(
+            vec![
+                vk1.clone().into(),
+                vk2.clone().into(),
+                vk3.clone().into(),
+                vk4.clone().into(),
+            ],
+            &sk1,
+        );
 
         let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 1);
         let transaction_b1_2 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 2);
 
         let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
 
-        let block_b1_1 = Block::new(1, blockchain.best_path_head.0, 1, vk2.clone(), vec![transaction_b1_1], &sk2);
+        let block_b1_1 = Block::new(
+            1,
+            blockchain.best_path_head.0,
+            1,
+            vk2.clone(),
+            vec![transaction_b1_1],
+            &sk2,
+        );
         assert!(block_b1_1.verify_signature());
-        let block_b2_1 = Block::new(1, blockchain.best_path_head.0, 1, vk2.clone(), vec![transaction_b2_1], &sk2);
+        let block_b2_1 = Block::new(
+            1,
+            blockchain.best_path_head.0,
+            1,
+            vk2.clone(),
+            vec![transaction_b2_1],
+            &sk2,
+        );
         assert!(block_b2_1.verify_signature());
-        let block_b1_2 = Block::new(2, block_b1_1.hash, 2, vk2.clone(), vec![transaction_b1_2], &sk2);
+        let block_b1_2 = Block::new(
+            2,
+            block_b1_1.hash,
+            2,
+            vk2.clone(),
+            vec![transaction_b1_2],
+            &sk2,
+        );
         assert!(block_b1_2.verify_signature());
 
         blockchain.blocks.push(HashMap::new());
-        
+
         assert!(blockchain.add_block(block_b2_1.clone())); // this is always true, since we increase the depth
         if blockchain.add_block(block_b1_1.clone()) {
             // in case of a rollback
-            assert_eq!(*blockchain.ledger.map.get(&vk1.clone().into()).unwrap(), ROOT_AMOUNT - 10 - TRANSACTION_FEE)
+            assert_eq!(
+                *blockchain.ledger.map.get(&vk1.clone().into()).unwrap(),
+                ROOT_AMOUNT - 10 - TRANSACTION_FEE
+            )
         } else {
             // in case of no rollback so still b2_1 state
-            assert_eq!(*blockchain.ledger.map.get(&vk1.clone().into()).unwrap(), ROOT_AMOUNT - 20 - TRANSACTION_FEE)
+            assert_eq!(
+                *blockchain.ledger.map.get(&vk1.clone().into()).unwrap(),
+                ROOT_AMOUNT - 20 - TRANSACTION_FEE
+            )
         }
 
         assert!(blockchain.add_block(block_b1_2.clone())); // this will always be true, it may or may not cause a rollback
-        // so now the ledger follows b1_2,
-        // if we then add b2_2 and b2_3 there must be a rollback
+                                                           // so now the ledger follows b1_2,
+                                                           // if we then add b2_2 and b2_3 there must be a rollback
         let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
-        let block_b2_2 = Block::new(2, block_b2_1.hash, 2, vk2.clone(), vec![transaction_b2_2], &sk2);
+        let block_b2_2 = Block::new(
+            2,
+            block_b2_1.hash,
+            2,
+            vk2.clone(),
+            vec![transaction_b2_2],
+            &sk2,
+        );
         let transaction_b2_3 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
-        let block_b2_3 = Block::new(3, block_b2_2.hash, 3, vk2.clone(), vec![transaction_b2_3], &sk2);
+        let block_b2_3 = Block::new(
+            3,
+            block_b2_2.hash,
+            3,
+            vk2.clone(),
+            vec![transaction_b2_3],
+            &sk2,
+        );
         blockchain.add_block(block_b2_2);
         assert!(blockchain.add_block(block_b2_3));
 
         // now we check the ledgers state
-        assert_eq!(*blockchain.ledger.map.get(&vk1.clone().into()).unwrap(), ROOT_AMOUNT - 60 - 3 * TRANSACTION_FEE);
-        assert_eq!(*blockchain.ledger.map.get(&vk4.clone().into()).unwrap(), ROOT_AMOUNT + 60);
-
-        
+        assert_eq!(
+            *blockchain.ledger.map.get(&vk1.clone().into()).unwrap(),
+            ROOT_AMOUNT - 60 - 3 * TRANSACTION_FEE
+        );
+        assert_eq!(
+            *blockchain.ledger.map.get(&vk4.clone().into()).unwrap(),
+            ROOT_AMOUNT + 60
+        );
     }
 
     #[test]
     fn test_stake() {
+        let (_, vk1) = generate_keypair();
+        let (_, vk2) = generate_keypair();
+        let (_, vk3) = generate_keypair();
+        
+        for _ in 0..10 {
+            let (sk, vk) = generate_keypair();
+            let mut blockchain = Blockchain::start(vec![vk.clone().into(), vk1.clone().into(), vk2.clone().into(), vk3.clone().into()], &sk);
+
+            let mut block = Block::new(0, blockchain.best_path_head.0, 1, vk.clone().into(), Vec::new(), &sk);
+            let mut has_won = blockchain.stake(&block, &vk.clone().into());
+            let mut tries = 0;
+            while !has_won {
+                block.increment_timestamp();
+                block.set_draw(&sk);
+                has_won = blockchain.stake(&block, &vk.clone().into());
+                tries += 1;
+            }
+            
+            println!("Tries: {}", tries);
+            block.sign_and_rehash(&sk);
+            assert!(blockchain.add_block(block));
+        }
+
 
     }
 
     #[test]
-    fn test_orphanage() {
-
-    }
-
-    #[test]
-    fn test_add_block() {
-
-    }
+    fn test_orphanage() {}
 }

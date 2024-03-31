@@ -14,3 +14,4 @@ serde_json = "1.0.114"
 tokio = "1.36.0"
 rsa = { git = "https://github.com/LWEdslev/RSA", branch = "master", features = ["serde", "sha2"]}
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
+num-bigint = {version = "0.4.4", features = ["serde"] }
