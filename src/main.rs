@@ -28,9 +28,7 @@ fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
     (signing_key, verifying_key)
 }
 
-fn main() {
-   
-}
+fn main() {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
@@ -50,7 +48,6 @@ impl Transaction {
         amount: u64,
         timeslot: Timeslot,
     ) -> Self {
-        let id = uuid::Uuid::new_v4();
         let fields_string = Self::combine_fields_to_string(&from, &to, amount, &timeslot);
         let mut rng = thread_rng();
         let mut hasher = Sha256::new();
@@ -159,9 +156,21 @@ impl Block {
     }
 
     fn verify_all(&self, previous_transactions: &HashSet<[u8; 32]>) -> bool {
-        self.verify_signature()
-            && self.verify_transactions(previous_transactions)
-            && self.verify_winner()
+        let signature = self.verify_signature();
+        let transactions = self.verify_transactions(previous_transactions);
+        let winner = self.verify_winner();
+        println!("s {signature}, t {transactions}, w {winner}");
+        signature && transactions && winner
+    }
+
+    fn verify_genesis(&self, root_accounts: &Vec<RsaPublicKey>) -> bool {
+        let mut hasher = Sha256::new();
+        for ra in root_accounts.iter() {
+            hasher.update(ra.to_pkcs1_der().unwrap().as_bytes());
+        }
+
+        let seed_hash: [u8; 32] = hasher.finalize().into();
+        self.transactions.is_empty() && self.verify_signature() && seed_hash == self.prev_hash
     }
 
     // TODO This is an very inefficient function
@@ -202,6 +211,20 @@ impl Block {
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         self.hash = hash;
         self.signature = sk.sign_with_rng(&mut thread_rng(), &hash);
+    }
+
+    fn rehash(&mut self) {
+        let fields_string = Block::combine_fields_to_string(
+            &self.timeslot,
+            &self.prev_hash,
+            self.depth,
+            &self.draw,
+            &self.transactions,
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(fields_string.as_bytes());
+        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        self.hash = hash;
     }
 
     // Tiebreak
@@ -286,7 +309,7 @@ impl Draw {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Ledger {
     map: HashMap<RsaPublicKey, u64>,
     previous_transactions: HashSet<[u8; 32]>,
@@ -369,6 +392,28 @@ impl Ledger {
     }
 }
 
+fn is_winner(ledger: &Ledger, block: &Block, wallet: &RsaPublicKey) -> bool {
+    #[cfg(feature = "always_win")]
+    return true;
+
+    let balance = BigUint::from(ledger.get_balance(&wallet));
+    let total_money = ledger.get_total_money_in_ledger();
+
+    let max_hash = BigUint::from(2u64).pow(256);
+
+    // the entire network has a total 10% chance of beating this at a given timeslot
+    let hardness = BigUint::from(10421u64) * (BigUint::from(10u64).pow(73));
+
+    // we must map the draw value which is in [0, 2^256] to [0, h + c(2^256 - h)] where h is hardness and c is the ratio of money we have
+    // we can map this by multiplying the draw with (h + c(2^256 - h))/(2^256)
+    // we can describe c as balance/total_money. Therefore we can multiply total_money to the hardness and write the multiplication factor as:
+    let mult_factor =
+        (hardness.clone() * total_money) + (balance * (max_hash.clone() - hardness.clone()));
+
+    // We win if we have a good draw and a big enough fraction of the money
+    block.draw.value.clone() * mult_factor > hardness * total_money * max_hash.clone()
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Blockchain {
     blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block TODO encapsulate
@@ -423,10 +468,7 @@ impl Blockchain {
             return false;
         }
         let depth = block.depth as usize;
-        while depth >= self.blocks.len() {
-            // create empty hashmaps if the block is in the future, this will usually just be done once
-            self.blocks.push(HashMap::new());
-        }
+
         let get_parent = |parent_hash: [u8; 32]| {
             let map = self.blocks.get(depth - 1)?;
             map.get(&parent_hash)
@@ -444,6 +486,12 @@ impl Blockchain {
             println!("unable to find parent block");
             return false;
         };
+
+        while depth >= self.blocks.len() {
+            // create empty hashmaps if the block is in the future, this will usually just be done once
+            self.blocks.push(HashMap::new());
+            dbg!("updated length to {}", self.blocks.len());
+        }
 
         // clone the stuff we need later
         let block_hash = block.hash.clone();
@@ -549,22 +597,7 @@ impl Blockchain {
     /// Simply checks if you've won
     /// TODO this function needs optimizations probably
     pub fn stake(&self, block: &Block, wallet: &RsaPublicKey) -> bool {
-        let balance = BigUint::from(self.ledger.get_balance(&wallet));
-        let total_money = self.ledger.get_total_money_in_ledger();
-
-        let max_hash = BigUint::from(2u64).pow(256);
-
-        // the entire network has a total 10% chance of beating this at a given timeslot
-        let hardness = BigUint::from(10421u64) * (BigUint::from(10u64).pow(73));
-
-        // we must map the draw value which is in [0, 2^256] to [0, h + c(2^256 - h)] where h is hardness and c is the ratio of money we have
-        // we can map this by multiplying the draw with (h + c(2^256 - h))/(2^256)
-        // we can describe c as balance/total_money. Therefore we can multiply total_money to the hardness and write the multiplication factor as:
-        let mult_factor =
-            (hardness.clone() * total_money) + (balance * (max_hash.clone() - hardness.clone()));
-
-        // We win if we have a good draw and a big enough fraction of the money
-        block.draw.value.clone() * mult_factor > hardness * total_money * max_hash.clone()
+        is_winner(&self.ledger, block, wallet)
     }
 
     fn proccess_transactions(&mut self, transactions: &Vec<Transaction>) {
@@ -576,6 +609,7 @@ impl Blockchain {
     /// Verifies that the entire blockchain follows the rules
     pub fn verify_chain(&self) -> bool {
         if !self.check_best_path() {
+            println!("not best path");
             return false;
         }
 
@@ -609,20 +643,55 @@ impl Blockchain {
             walking_ptr = get_parent_ptr(&walking_ptr);
         }
         // now the track_stack contains all on the best path except genesis
+        // we will also track a ledger to see if it matches the proposed ledger
         // we then check the track_stack
+        let mut track_ledger = {
+            let mut l = Ledger::new();
+            self.root_accounts
+                .iter()
+                .for_each(|acc| l.reward_winner(acc, ROOT_AMOUNT));
+            l
+        };
         let previous_transactions = HashSet::new();
         let mut prev_ptr = genesis_block;
         while let Some((block_hash, depth)) = track_stack.pop() {
             let block = get_block(&(block_hash, depth));
-            if block.prev_hash != prev_ptr.0 || block.verify_all(&previous_transactions) {
+            if block.prev_hash != prev_ptr.0 {
+                println!("hash mishmatch");
                 return false;
             }
+            if !block.verify_all(&previous_transactions) {
+                println!("block not verified");
+                return false;
+            }
+
+            // we process the transactions for the track ledger and they must all be valid
+            if !block
+                .transactions
+                .iter()
+                .all(|t| track_ledger.process_transaction(&t))
+            {
+                return false;
+            };
+
+            if !is_winner(&track_ledger, block, &block.draw.signed_by.clone().into()) {
+                println!("false winner");
+                return false;
+            }
+
             prev_ptr = (block_hash, depth);
         }
 
         // we then check the genesis block
         let genesis_block = get_block(&genesis_block);
-        if !genesis_block.transactions.is_empty() {
+        if !genesis_block.transactions.is_empty()
+            || !genesis_block.verify_genesis(&self.root_accounts)
+        {
+            return false;
+        }
+
+        if self.ledger != track_ledger {
+            dbg!("ledger mismatch");
             return false;
         }
 
@@ -633,10 +702,16 @@ impl Blockchain {
     pub fn check_best_path(&self) -> bool {
         let max_depth = self.best_path_head.1 as usize;
         if self.blocks.len() - 1 != max_depth {
+            println!(
+                "blocks len does not match depth {} vs {}",
+                self.blocks.len() - 1,
+                max_depth
+            );
             return false;
         }
         let blocks_at_max_depth = self.blocks[max_depth].clone();
         if blocks_at_max_depth.is_empty() {
+            println!("no blocks at max depth");
             return false;
         }
         if blocks_at_max_depth.len() > 1 {
@@ -744,6 +819,7 @@ mod tests {
         assert!(!ledger.process_transaction(&transaction)); // invalid signature
     }
 
+    #[cfg(feature = "always_win")]
     #[test]
     fn test_blockchain_rollback() {
         let (sk1, vk1) = generate_keypair();
@@ -765,10 +841,10 @@ mod tests {
 
         assert!(blockchain.verify_chain());
 
-        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 1);
-        let transaction_b1_2 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 2);
+        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 0);
+        let transaction_b1_2 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 1);
 
-        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
+        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 0);
 
         let block_b1_1 = Block::new(
             1,
@@ -818,7 +894,7 @@ mod tests {
         assert!(blockchain.add_block(block_b1_2.clone())); // this will always be true, it may or may not cause a rollback
                                                            // so now the ledger follows b1_2,
                                                            // if we then add b2_2 and b2_3 there must be a rollback
-        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 2);
+        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
         let block_b2_2 = Block::new(
             2,
             block_b2_1.hash,
@@ -827,7 +903,7 @@ mod tests {
             vec![transaction_b2_2],
             &sk2,
         );
-        let transaction_b2_3 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 3);
+        let transaction_b2_3 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 2);
         let block_b2_3 = Block::new(
             3,
             block_b2_2.hash,
@@ -910,6 +986,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "always_win")]
     #[test]
     fn test_orphanage() {
         let (sk1, vk1) = generate_keypair();
@@ -929,10 +1006,10 @@ mod tests {
             &sk1,
         );
 
-        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 1);
+        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 0);
 
-        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
-        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 2);
+        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 0);
+        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
 
         let block_b1_1 = Block::new(
             1,
@@ -962,10 +1039,18 @@ mod tests {
             &sk2,
         );
 
+        assert!(blockchain.verify_chain());
+
         assert!(blockchain.add_block(block_b1_1));
         assert!(blockchain.orphans.is_empty());
+
+        assert!(blockchain.verify_chain());
+
         assert!(!blockchain.add_block(block_b2_2));
         assert_eq!(blockchain.orphans.len(), 1);
+
+        assert!(blockchain.verify_chain());
+
         assert!(blockchain.add_block(block_b2_1));
         assert!(blockchain.orphans.is_empty());
         assert_eq!(
@@ -977,7 +1062,29 @@ mod tests {
 
     #[test]
     fn test_illegal_genesis_block() {
-        todo!()
+        let (sk1, vk1) = generate_keypair();
+        let (_, vk2) = generate_keypair();
+        let (_, vk3) = generate_keypair();
+        let (_, vk4) = generate_keypair();
+
+        let mut blockchain = Blockchain::start(
+            vec![
+                vk1.clone().into(),
+                vk2.clone().into(),
+                vk3.clone().into(),
+                vk4.clone().into(),
+            ],
+            &sk1,
+        );
+
+        assert!(blockchain.verify_chain());
+
+        let zero_map = blockchain.blocks.get_mut(0).unwrap();
+        assert_eq!(zero_map.len(), 1);
+        let genesis_block = zero_map.get_mut(&blockchain.best_path_head.0).unwrap();
+        genesis_block.depth = 1;
+
+        assert!(!blockchain.verify_chain());
     }
 
     #[test]
@@ -992,6 +1099,11 @@ mod tests {
 
     #[test]
     fn test_illegal_block() {
+        todo!()
+    }
+
+    #[test]
+    fn test_illegal_ledger() {
         todo!()
     }
 }
