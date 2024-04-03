@@ -71,7 +71,10 @@ impl Transaction {
         amount: u64,
         timeslot: &Timeslot,
     ) -> String {
-        format!("{:?}{:?}{}{}", from, to, amount, timeslot)
+        let hexify = |k: &Address| {
+            hex::encode(k.to_pkcs1_der().unwrap().as_bytes())
+        };
+        format!("{:?}{:?}{}{}", hexify(from), hexify(to), amount, timeslot)
     }
 
     pub fn verify_signature(&self) -> bool {
@@ -173,7 +176,7 @@ impl Block {
         self.transactions.is_empty() && self.verify_signature() && seed_hash == self.prev_hash
     }
 
-    // TODO This is an very inefficient function
+    // this should be replaced with a hashing function
     fn combine_fields_to_string(
         timeslot: &Timeslot,
         prev_hash: &[u8; 32],
@@ -181,8 +184,10 @@ impl Block {
         draw: &Draw,
         transactions: &Vec<Transaction>,
     ) -> String {
-        let transactions = serde_json::to_string(transactions).unwrap();
-        format!("{timeslot}{prev_hash:?}{depth}{draw:?}{transactions}")
+        // we can just use the hashes and the signatures of these to save a lot of space while preserving safety
+        let transactions = serde_json::to_string(&transactions.iter().map(|t| t.hash).collect::<Vec<_>>()).unwrap();
+        let draw = hex::encode(draw.signature.to_bytes());
+        format!("{timeslot}{prev_hash:?}{depth}{draw}{transactions}")
     }
 
     fn increment_timeslot(&mut self) {
@@ -330,7 +335,7 @@ impl Ledger {
     }
 
     pub fn get_balance(&self, account: &RsaPublicKey) -> u64 {
-        *self.map.get(account.into()).unwrap()
+        *self.map.get(account).unwrap()
     }
 
     pub fn reward_winner(&mut self, winner: &RsaPublicKey, amount: u64) {
@@ -347,13 +352,13 @@ impl Ledger {
         if transaction.amount < TRANSACTION_FEE {
             return false;
         };
-        let from: RsaPublicKey = transaction.from.clone().into();
-        let to: RsaPublicKey = transaction.to.clone().into();
+        let from: &RsaPublicKey = transaction.from.as_ref();
+        let to: &RsaPublicKey = transaction.to.as_ref();
         let amount = transaction.amount;
-        self.add_acount_if_absent(&from);
-        self.add_acount_if_absent(&to);
+        self.add_acount_if_absent(from);
+        self.add_acount_if_absent(to);
 
-        let from_balance = self.map.get_mut(&from).unwrap();
+        let from_balance = self.map.get_mut(from).unwrap();
 
         if *from_balance < amount + TRANSACTION_FEE {
             return false;
@@ -364,7 +369,7 @@ impl Ledger {
         }
 
         *from_balance -= amount + TRANSACTION_FEE;
-        let to_balance = self.map.get_mut(&to.into()).unwrap();
+        let to_balance = self.map.get_mut(to).unwrap();
 
         *to_balance += amount;
 
@@ -374,21 +379,27 @@ impl Ledger {
     /// Reverse the transaction
     /// panics if the transaction was not performed
     pub fn rollback_transaction(&mut self, transaction: &Transaction) {
-        let from: RsaPublicKey = transaction.from.clone().into();
-        let to: RsaPublicKey = transaction.to.clone().into();
+        let from: &RsaPublicKey = transaction.from.as_ref();
+        let to: &RsaPublicKey = transaction.to.as_ref();
         let amount = transaction.amount;
 
         assert!(self.previous_transactions.remove(&transaction.hash));
 
-        let from_balance = self.map.get_mut(&from).unwrap();
+        let from_balance = self.map.get_mut(from).unwrap();
 
         *from_balance += amount + TRANSACTION_FEE;
-        let to_balance = self.map.get_mut(&to.into()).unwrap();
+        let to_balance = self.map.get_mut(to).unwrap();
         *to_balance -= amount;
     }
 
     pub fn get_total_money_in_ledger(&self) -> u64 {
         self.map.values().sum()
+    }
+
+    fn rollback_reward(&mut self, winner: &RsaPublicKey) {
+        self.add_acount_if_absent(winner);
+        let balance = self.map.get_mut(winner).unwrap();
+        *balance -= BLOCK_REWARD;
     }
 }
 
@@ -416,11 +427,11 @@ fn is_winner(ledger: &Ledger, block: &Block, wallet: &RsaPublicKey) -> bool {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Blockchain {
-    blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block TODO encapsulate
+    blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block
     best_path_head: ([u8; 32], u64), // the hash and depth of the head of the current best path
     ledger: Ledger,                  // this should follow the best_path_heads state
     root_accounts: Vec<RsaPublicKey>,
-    orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks TODO encapsulate this
+    orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks
     transaction_buffer: Vec<Transaction>,
 }
 
@@ -514,11 +525,11 @@ impl Blockchain {
                 self.rollback((old_best_path, old_depth), (block_hash, depth as _));
             } else {
                 self.proccess_transactions(&block.transactions);
+                self.ledger
+                    .reward_winner(block.draw.signed_by.as_ref(), BLOCK_REWARD);
             }
         } else if depth == self.best_path_head.1 as usize {
             println!("equal depth");
-            // the tiebreaker is who has the lexicographically highest hex hash
-            // TODO add timestamp and len(transactions) tiebreaker
             let new_block = &block;
             let curr_best_block = {
                 let (h, d) = &self.best_path_head;
@@ -560,9 +571,9 @@ impl Blockchain {
             track_stack.push((to_ptr.hash, to_ptr.depth));
             if to_ptr.depth == 1 && from_ptr.depth == 1 {
                 if to_ptr.prev_hash == from_ptr.prev_hash {
+                    self.ledger.rollback_reward(to_ptr.draw.signed_by.as_ref());
                     for t in from_ptr.transactions.iter() {
                         self.ledger.rollback_transaction(t);
-                        println!("rolling back t");
                     }
                     break; // we have reached the genesis block
                 }
@@ -574,6 +585,7 @@ impl Blockchain {
             if old_to_ptr_depth == from_ptr.depth {
                 // to_depth is always >= from_depth so we have to ensure that to goes back first
                 // we roll back the transactions on the from path
+                self.ledger.rollback_reward(to_ptr.draw.signed_by.as_ref());
                 for t in from_ptr.transactions.iter() {
                     self.ledger.rollback_transaction(t);
                 }
@@ -591,11 +603,12 @@ impl Blockchain {
             for t in block.transactions.iter() {
                 self.ledger.process_transaction(t); // an optimization is not verifying the transaction here
             }
+            self.ledger
+                .reward_winner(block.draw.signed_by.as_ref(), BLOCK_REWARD);
         }
     }
 
     /// Simply checks if you've won
-    /// TODO this function needs optimizations probably
     pub fn stake(&self, block: &Block, wallet: &RsaPublicKey) -> bool {
         is_winner(&self.ledger, block, wallet)
     }
@@ -654,8 +667,15 @@ impl Blockchain {
         };
         let previous_transactions = HashSet::new();
         let mut prev_ptr = genesis_block;
+        let genesis_block = get_block(&genesis_block);
+        let mut prev_ts = genesis_block.timeslot;
         while let Some((block_hash, depth)) = track_stack.pop() {
             let block = get_block(&(block_hash, depth));
+            if block.timeslot <= prev_ts {
+                return false;
+            }
+            prev_ts = block.timeslot;
+
             if block.prev_hash != prev_ptr.0 {
                 println!("hash mishmatch");
                 return false;
@@ -674,16 +694,18 @@ impl Blockchain {
                 return false;
             };
 
-            if !is_winner(&track_ledger, block, &block.draw.signed_by.clone().into()) {
+            let winner = block.draw.signed_by.as_ref();
+            if !is_winner(&track_ledger, block, winner) {
                 println!("false winner");
                 return false;
             }
+
+            track_ledger.reward_winner(winner, BLOCK_REWARD);
 
             prev_ptr = (block_hash, depth);
         }
 
         // we then check the genesis block
-        let genesis_block = get_block(&genesis_block);
         if !genesis_block.transactions.is_empty()
             || !genesis_block.verify_genesis(&self.root_accounts)
         {
@@ -691,7 +713,7 @@ impl Blockchain {
         }
 
         if self.ledger != track_ledger {
-            dbg!("ledger mismatch");
+            dbg!("ledger mismatch {:#?}\n{:#?}", &self.ledger, track_ledger);
             return false;
         }
 
@@ -790,7 +812,7 @@ mod tests {
         let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50, 0);
 
         let mut ledger = Ledger::new();
-        ledger.reward_winner(&from_rsa, 102);
+        ledger.reward_winner(from.as_ref(), 102);
         assert!(ledger.process_transaction(&transaction));
 
         assert_eq!(ledger.get_balance(&from_rsa), 51);
@@ -1089,21 +1111,87 @@ mod tests {
 
     #[test]
     fn test_illegal_transaction() {
-        todo!()
+        let (sk1, vk1) = generate_keypair();
+        let (_, vk2) = generate_keypair();
+        let (_, vk3) = generate_keypair();
+        let (_, vk4) = generate_keypair();
+
+        let mut blockchain = Blockchain::start(
+            vec![
+                vk1.clone().into(),
+                vk2.clone().into(),
+                vk3.clone().into(),
+                vk4.clone().into(),
+            ],
+            &sk1,
+        );
+
+        assert!(blockchain.verify_chain());
+
+        let zero_map = blockchain.blocks.get_mut(0).unwrap();
+        assert_eq!(zero_map.len(), 1);
+        let genesis_block = zero_map.get_mut(&blockchain.best_path_head.0).unwrap();
+        genesis_block.transactions = vec![Transaction::new(vk1.clone(), vk1, &sk1, 4, 0)];
+        assert!(!blockchain.verify_chain());
     }
 
-    #[test]
-    fn test_illegal_draw() {
-        todo!()
-    }
-
-    #[test]
-    fn test_illegal_block() {
-        todo!()
-    }
-
+    #[cfg(feature = "always_win")]
     #[test]
     fn test_illegal_ledger() {
-        todo!()
+        let (sk1, vk1) = generate_keypair();
+        let (_, vk2) = generate_keypair();
+        let (_, vk3) = generate_keypair();
+        let (_, vk4) = generate_keypair();
+
+        let mut blockchain = Blockchain::start(vec![
+            vk1.clone().into(),
+            vk2.clone().into(),
+            vk3.clone().into(),
+            vk4.clone().into(),
+        ], &sk1);
+
+        let mut block = Block::new(1, blockchain.best_path_head.0, 1, vk1.clone(), Vec::new(), &sk1);
+        loop {
+            if blockchain.stake(&block, vk1.as_ref()) {
+                break;
+            } else { 
+                block.increment_timeslot();
+            }
+        }
+
+        assert!(blockchain.add_block(block));
+    
+        assert!(blockchain.verify_chain());
+        blockchain.ledger.reward_winner(vk1.as_ref(), 50);
+        assert!(!blockchain.verify_chain());
+    }
+
+    #[cfg(not(feature = "always_win"))]
+    #[test]
+    fn test_illegal_block() {
+        let (sk1, vk1) = generate_keypair();
+        let (_, vk2) = generate_keypair();
+        let (_, vk3) = generate_keypair();
+        let (_, vk4) = generate_keypair();
+
+        let mut blockchain = Blockchain::start(vec![
+            vk1.clone().into(),
+            vk2.clone().into(),
+            vk3.clone().into(),
+            vk4.clone().into(),
+        ], &sk1);
+
+        let mut block = Block::new(1, blockchain.best_path_head.0, 1, vk1.clone(), Vec::new(), &sk1);
+        loop {
+            if blockchain.stake(&block, vk1.as_ref()) {
+                block.increment_timeslot();
+            } else { 
+                break;
+            }
+        }
+
+        assert!(blockchain.verify_chain());
+        blockchain.add_block(block);
+        assert!(!blockchain.verify_chain());
     }
 }
