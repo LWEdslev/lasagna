@@ -7,8 +7,8 @@ use crate::{transaction::Transaction, BLOCK_REWARD, TRANSACTION_FEE};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Ledger {
-    map: HashMap<RsaPublicKey, u64>,
-    previous_transactions: HashSet<[u8; 32]>,
+    pub(super) map: HashMap<RsaPublicKey, u64>,
+    pub(super) previous_transactions: HashSet<[u8; 32]>,
 }
 
 impl Ledger {
@@ -91,5 +91,31 @@ impl Ledger {
         self.add_acount_if_absent(winner);
         let balance = self.map.get_mut(winner).unwrap();
         *balance -= BLOCK_REWARD;
+    }
+    
+    pub(crate) fn is_transaction_possible(&self, transaction: &Transaction) -> bool {
+        if !transaction.verify_signature() {
+            return false;
+        };
+        if transaction.amount < TRANSACTION_FEE {
+            return false;
+        };
+        let from: &RsaPublicKey = transaction.from.as_ref();
+        let to: &RsaPublicKey = transaction.to.as_ref();
+        let amount = transaction.amount;
+
+        let Some(from_balance) = self.map.get(from) else {
+            return false; // if the account does not exist it can't have enough money to pay the fee
+        };
+
+        if *from_balance < amount + TRANSACTION_FEE {
+            return false;
+        }
+
+        if self.previous_transactions.contains(&transaction.hash) {
+            return false;
+        }
+
+        true
     }
 }

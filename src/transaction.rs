@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use rand::thread_rng;
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::signature::RandomizedSigner;
@@ -62,5 +64,19 @@ impl Transaction {
         hasher.update(fields_string);
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         hash == self.hash && self.from.verify(&hash, &self.signature).is_ok()
+    }
+}
+
+impl PartialEq for Transaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+    }
+}
+
+impl Eq for Transaction {}
+
+impl Hash for Transaction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.hash.hash(state)
     }
 }

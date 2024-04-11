@@ -1,24 +1,31 @@
 use block::Block;
+use blockchain::Blockchain;
 use ledger::Ledger;
 use num_bigint::BigUint;
 use rand::thread_rng;
 use rsa::{pss::{SigningKey, VerifyingKey}, sha2::Sha256, RsaPublicKey};
 use rsa::signature::Keypair;
+use serde::{Deserialize, Serialize};
 
 pub mod block;
 pub mod blockchain;
 pub mod draw;
 pub mod ledger;
 pub mod transaction;
+pub mod blockchain_actor;
+pub mod network_actor;
+pub mod client_actor;
+pub mod pippi;
 
 pub const TRANSACTION_FEE: u64 = 1;
 pub const BLOCK_REWARD: u64 = 50;
-pub const ROOT_AMOUNT: u64 = 300;
+pub const ROOT_AMOUNT: u64 = 3;
+pub const SLOT_LENGTH: u128 = 100; // TODO Increase to 10_000 aka 10 sec
 
 pub(crate) type Timeslot = u64;
 pub(crate) type Address = VerifyingKey<Sha256>;
 
-pub(crate) fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
+pub fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
     let mut rng = thread_rng();
 
     #[cfg(not(feature = "small_key"))]
@@ -53,9 +60,39 @@ fn is_winner(ledger: &Ledger, block: &Block, wallet: &RsaPublicKey) -> bool {
     block.draw.value.clone() * mult_factor > hardness * total_money * max_hash.clone()
 }
 
+pub fn get_unix_timestamp() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ClientMessage {
+    Won(Block),
+    BalanceOf(RsaPublicKey, u64),
+    External(ExternalMessage),
+}
+
+/// Messages received on the network
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ExternalMessage {
+    Bootstrap(Blockchain),
+}
+
+impl From<ExternalMessage> for ClientMessage {
+    fn from(value: ExternalMessage) -> Self {
+        ClientMessage::External(value)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "always_win")]
+    use std::collections::HashMap;
+
     use crate::{blockchain::Blockchain, draw::Draw, transaction::Transaction};
 
     use super::*;

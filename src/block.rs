@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub(super) timeslot: Timeslot,
-    pub(super) prev_hash: [u8; 32],
+    pub prev_hash: [u8; 32],
     pub(super) depth: u64,
     pub(super) transactions: Vec<Transaction>,
     pub(super) draw: Draw,
     pub(super) signature: Signature,
-    pub(super) hash: [u8; 32],
+    pub hash: [u8; 32],
 }
 
 impl Block {
@@ -118,7 +118,7 @@ impl Block {
         format!("{timeslot}{prev_hash:?}{depth}{draw}{transactions}")
     }
 
-    pub(super) fn increment_timeslot(&mut self) {
+    pub fn increment_timeslot(&mut self) {
         self.timeslot += 1;
     }
 

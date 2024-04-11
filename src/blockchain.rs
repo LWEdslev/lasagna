@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
+use rsa::RsaPrivateKey;
 use rsa::{pss::SigningKey, sha2::Sha256, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::Timeslot;
 use crate::{
     block::Block, is_winner, ledger::Ledger, transaction::Transaction, BLOCK_REWARD, ROOT_AMOUNT,
 };
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::sha2::Digest;
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Blockchain {
     pub(super) blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block
     pub(super) best_path_head: ([u8; 32], u64), // the hash and depth of the head of the current best path
@@ -16,6 +18,7 @@ pub struct Blockchain {
     pub(super) root_accounts: Vec<RsaPublicKey>,
     pub(super) orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks
     pub(super) transaction_buffer: Vec<Transaction>,
+    start_time: u128,
 }
 
 impl Blockchain {
@@ -52,6 +55,7 @@ impl Blockchain {
             root_accounts,
             orphans: HashMap::new(),
             transaction_buffer: Vec::new(),
+            start_time: crate::get_unix_timestamp(),
         }
     }
 
@@ -70,21 +74,30 @@ impl Blockchain {
 
         let parent_hash = block.prev_hash;
         let parent_block = get_parent(block.prev_hash);
-        let Some(_) = parent_block else {
+        let Some(parent_block) = parent_block else {
             // the parent does not exist yet so we are an orphan
             if let Some(orphans_of_prev) = self.orphans.get_mut(&block.prev_hash) {
                 orphans_of_prev.push(block);
             } else {
                 self.orphans.insert(block.prev_hash, vec![block]);
             }
-            println!("unable to find parent block");
+            println!(
+                "unable to find parent block, was looking for {:?}, best path head is {}",
+                &hex::encode(parent_hash)[0..5],
+                &hex::encode(self.best_path_head.0)[0..5]
+            );
             return false;
         };
+
+        // we check the timeslot
+        if block.timeslot <= parent_block.timeslot || block.timeslot > self.calculate_timeslot(){
+            return false;
+        }
 
         while depth >= self.blocks.len() {
             // create empty hashmaps if the block is in the future, this will usually just be done once
             self.blocks.push(HashMap::new());
-            dbg!("updated length to {}", self.blocks.len());
+            //dbg!("updated length to {}", self.blocks.len());
         }
 
         // clone the stuff we need later
@@ -94,6 +107,8 @@ impl Blockchain {
             .get_mut(depth)
             .expect("unreachable")
             .insert(block.hash.clone(), block.clone());
+
+        self.transaction_buffer.clear();
 
         // we check if this is the new best path
         let (old_best_path, old_depth) = self.best_path_head;
@@ -112,7 +127,7 @@ impl Blockchain {
                     .reward_winner(block.draw.signed_by.as_ref(), BLOCK_REWARD);
             }
         } else if depth == self.best_path_head.1 as usize {
-            println!("equal depth");
+            //println!("equal depth");
             let new_block = &block;
             let curr_best_block = {
                 let (h, d) = &self.best_path_head;
@@ -137,6 +152,58 @@ impl Blockchain {
 
         // return whether the best_path has been updated
         old_best_path != self.best_path_head.0
+    }
+
+    pub fn get_latest_block(&self) -> &Block {
+        self.blocks[self.best_path_head.1 as usize]
+            .get(&self.best_path_head.0)
+            .unwrap()
+    }
+
+    fn calculate_timeslot(&self) -> Timeslot {
+        let now = crate::get_unix_timestamp();
+        let start = self.start_time;
+        let timeslot = (now - start) / 10;
+        timeslot as _
+    }
+
+    pub fn create_empty_mining_block(
+        &self,
+        account: RsaPublicKey,
+        account_sk: &RsaPrivateKey,
+    ) -> Block {
+        Block::new(
+            self.calculate_timeslot(),
+            self.best_path_head.0,
+            self.best_path_head.1 + 1,
+            account.into(),
+            Vec::new(),
+            &account_sk.clone().into(),
+        )
+    }
+
+    pub fn create_mining_block(
+        &self,
+        account: RsaPublicKey,
+        account_sk: &RsaPrivateKey,
+    ) -> Block {
+        Block::new(
+            self.calculate_timeslot(),
+            self.best_path_head.0,
+            self.best_path_head.1 + 1,
+            account.into(),
+            self.transaction_buffer.clone(),
+            &account_sk.clone().into(),
+        )
+    }
+
+    pub fn add_transaction(&mut self, transaction: Transaction) {
+        if transaction.verify_signature()
+            && transaction.timeslot >= self.get_latest_block().timeslot
+            && self.ledger.is_transaction_possible(&transaction)
+        {
+            self.transaction_buffer.push(transaction);
+        }
     }
 
     pub fn rollback(&mut self, from: ([u8; 32], u64), to: ([u8; 32], u64)) {
@@ -200,6 +267,10 @@ impl Blockchain {
         for t in transactions.iter() {
             self.ledger.process_transaction(t); // an optimization is not verifying the transaction here
         }
+    }
+
+    pub fn get_balance(&self, account_sk: &RsaPublicKey) -> u64 {
+        self.ledger.map.get(account_sk).cloned().unwrap_or(0)
     }
 
     /// Verifies that the entire blockchain follows the rules
@@ -335,5 +406,20 @@ impl Blockchain {
         }
 
         true
+    }
+
+    pub fn get_best_hash(&self) -> [u8; 32] {
+        self.best_path_head.0
+    }
+    
+    pub(crate) fn update_mining_block(&self, mining_block: &mut Block) {
+        let (best_hash, best_depth) = self.best_path_head;
+        mining_block.depth = best_depth + 1;
+        mining_block.prev_hash = best_hash;
+        mining_block.transactions = self.transaction_buffer.clone();
+    }
+    
+    pub(crate) fn update_mining_block_timeslot(&self, mining_block: &mut Block) {
+        mining_block.timeslot = self.calculate_timeslot();
     }
 }
