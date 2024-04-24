@@ -17,7 +17,6 @@ pub struct Transaction {
     pub(super) from: Address,
     pub(super) to: Address,
     pub(super) amount: u64,
-    pub(super) timeslot: Timeslot,
     pub(super) signature: Signature,
     pub(super) hash: [u8; 32],
 }
@@ -28,20 +27,22 @@ impl Transaction {
         to: Address,
         sk: &SigningKey<Sha256>,
         amount: u64,
-        timeslot: Timeslot,
     ) -> Self {
-        let fields_string = Self::combine_fields_to_string(&from, &to, amount, &timeslot);
+        let fields_string = Self::combine_fields_to_string(&from, &to, amount);
         let mut rng = thread_rng();
         let mut hasher = Sha256::new();
         hasher.update(fields_string);
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         let signature = sk.sign_with_rng(&mut rng, &hash);
+        let mut hasher = Sha256::new();
+        hasher.update(signature.to_string()); 
+        // we hash the signature as well, since we sign with RNG we have a unique hash 
+        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
 
         Self {
             from,
             to,
             amount,
-            timeslot,
             signature,
             hash,
         }
@@ -51,19 +52,24 @@ impl Transaction {
         from: &Address,
         to: &Address,
         amount: u64,
-        timeslot: &Timeslot,
     ) -> String {
         let hexify = |k: &Address| hex::encode(k.to_pkcs1_der().unwrap().as_bytes());
-        format!("{:?}{:?}{}{}", hexify(from), hexify(to), amount, timeslot)
+        format!("{:?}{:?}{}", hexify(from), hexify(to), amount)
     }
 
     pub fn verify_signature(&self) -> bool {
         let fields_string =
-            Self::combine_fields_to_string(&self.from, &self.to, self.amount, &self.timeslot);
+            Self::combine_fields_to_string(&self.from, &self.to, self.amount);
         let mut hasher = Sha256::new();
         hasher.update(fields_string);
+        let fields_hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+
+        let mut hasher = Sha256::new();
+        hasher.update(self.signature.to_string()); 
+        // we hash the signature as well, since we sign with RNG we have a unique hash 
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
-        hash == self.hash && self.from.verify(&hash, &self.signature).is_ok()
+
+        hash == self.hash && self.from.verify(&fields_hash, &self.signature).is_ok()
     }
 }
 

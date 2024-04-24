@@ -7,7 +7,12 @@ use lassecoin::{
 
 #[tokio::main]
 async fn main() {
-    let (sk, vk) = generate_keypair();
+    // main loop where we start the client and do the CLAP
+}
+
+/*
+
+let (sk, vk) = generate_keypair();
     let (_, vk1) = generate_keypair();
     let (_, vk2) = generate_keypair();
     let (_, vk3) = generate_keypair();
@@ -56,7 +61,8 @@ async fn main() {
     }
 
     tokio::time::sleep(Duration::from_secs(1000)).await;
-}
+
+*/
 
 /*
 // we make 5 root nodes and then try for 1000 timeslots, see what happens

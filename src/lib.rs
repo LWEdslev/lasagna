@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use block::Block;
 use blockchain::Blockchain;
 use ledger::Ledger;
@@ -6,6 +8,8 @@ use rand::thread_rng;
 use rsa::{pss::{SigningKey, VerifyingKey}, sha2::Sha256, RsaPublicKey};
 use rsa::signature::Keypair;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use transaction::Transaction;
 
 pub mod block;
 pub mod blockchain;
@@ -14,12 +18,13 @@ pub mod ledger;
 pub mod transaction;
 pub mod blockchain_actor;
 pub mod network_actor;
-pub mod client_actor;
 pub mod pippi;
+pub mod client;
+pub mod cli;
 
 pub const TRANSACTION_FEE: u64 = 1;
 pub const BLOCK_REWARD: u64 = 50;
-pub const ROOT_AMOUNT: u64 = 3;
+pub const ROOT_AMOUNT: u64 = 300;
 pub const SLOT_LENGTH: u128 = 100; // TODO Increase to 10_000 aka 10 sec
 
 pub(crate) type Timeslot = u64;
@@ -68,7 +73,8 @@ pub fn get_unix_timestamp() -> u128 {
         .as_millis()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// messages to the client
+#[derive(Clone, Debug)]
 pub enum ClientMessage {
     Won(Block),
     BalanceOf(RsaPublicKey, u64),
@@ -78,7 +84,16 @@ pub enum ClientMessage {
 /// Messages received on the network
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExternalMessage {
-    Bootstrap(Blockchain),
+    Bootstrap(Blockchain), // if we need a blockchain to start off on we take this one
+    BootstrapReqFrom(SocketAddr), // someone needs a blockchain 
+    BroadcastBlock(Block), // a won block
+}
+
+// messages from the CLI to the client 
+#[derive(Clone, Debug)]
+pub enum CLIMessage {
+    PostTransaction(Transaction),
+    CheckBalance(RsaPublicKey),
 }
 
 impl From<ExternalMessage> for ClientMessage {
@@ -87,6 +102,15 @@ impl From<ExternalMessage> for ClientMessage {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum LasseCoinError {
+    #[error("Error occured in the network actor")]
+    NetworkError,
+    #[error("Error occured when using the CLI")]
+    CLIError,
+}
+
+pub type Result<T> = std::result::Result<T, LasseCoinError>;
 
 #[cfg(test)]
 mod tests {
@@ -116,7 +140,7 @@ mod tests {
         let to = generate_keypair().1;
         let amount = 50;
         let timeslot: Timeslot = 0;
-        let transaction = Transaction::new(from.clone(), to.clone(), &sk, amount, timeslot);
+        let transaction = Transaction::new(from.clone(), to.clone(), &sk, amount);
 
         assert!(transaction.verify_signature());
     }
@@ -128,7 +152,7 @@ mod tests {
         let from = vk.clone();
         let to = generate_keypair().1;
         let amount = 50;
-        let transaction = Transaction::new(from.clone(), to.clone(), &sk, amount, 0);
+        let transaction = Transaction::new(from.clone(), to.clone(), &sk, amount);
         let transactions = vec![transaction];
 
         // Create a block
@@ -147,7 +171,7 @@ mod tests {
         let from_rsa: RsaPublicKey = from.clone().into();
         let to = vk2.clone();
         let to_rsa: RsaPublicKey = to.clone().into();
-        let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50, 0);
+        let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50);
 
         let mut ledger = Ledger::new();
         ledger.reward_winner(from.as_ref(), 102);
@@ -156,7 +180,7 @@ mod tests {
         assert_eq!(ledger.get_balance(&from_rsa), 51);
         assert_eq!(ledger.get_balance(&to_rsa), 50);
 
-        let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50, 1);
+        let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50);
         assert!(ledger.process_transaction(&transaction));
 
         assert_eq!(ledger.get_balance(&from_rsa), 0);
@@ -174,7 +198,7 @@ mod tests {
         ledger.reward_winner(&from_rsa, 100);
         ledger.reward_winner(&vk3.clone().into(), 100);
 
-        let transaction = Transaction::new(vk3.clone(), from.clone(), &sk, 50, 2);
+        let transaction = Transaction::new(vk3.clone(), from.clone(), &sk, 50);
 
         assert!(!ledger.process_transaction(&transaction)); // invalid signature
     }
@@ -201,10 +225,10 @@ mod tests {
 
         assert!(blockchain.verify_chain());
 
-        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 0);
-        let transaction_b1_2 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 1);
+        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10);
+        let transaction_b1_2 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10);
 
-        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 0);
+        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20);
 
         let block_b1_1 = Block::new(
             1,
@@ -254,7 +278,7 @@ mod tests {
         assert!(blockchain.add_block(block_b1_2.clone())); // this will always be true, it may or may not cause a rollback
                                                            // so now the ledger follows b1_2,
                                                            // if we then add b2_2 and b2_3 there must be a rollback
-        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
+        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20);
         let block_b2_2 = Block::new(
             2,
             block_b2_1.hash,
@@ -263,7 +287,7 @@ mod tests {
             vec![transaction_b2_2],
             &sk2,
         );
-        let transaction_b2_3 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 2);
+        let transaction_b2_3 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20);
         let block_b2_3 = Block::new(
             3,
             block_b2_2.hash,
@@ -366,10 +390,10 @@ mod tests {
             &sk1,
         );
 
-        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10, 0);
+        let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10);
 
-        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 0);
-        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20, 1);
+        let transaction_b2_1 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20);
+        let transaction_b2_2 = Transaction::new(vk1.clone(), vk4.clone(), &sk1, 20);
 
         let block_b1_1 = Block::new(
             1,
@@ -469,7 +493,7 @@ mod tests {
         let zero_map = blockchain.blocks.get_mut(0).unwrap();
         assert_eq!(zero_map.len(), 1);
         let genesis_block = zero_map.get_mut(&blockchain.best_path_head.0).unwrap();
-        genesis_block.transactions = vec![Transaction::new(vk1.clone(), vk1, &sk1, 4, 0)];
+        genesis_block.transactions = vec![Transaction::new(vk1.clone(), vk1, &sk1, 4)];
         assert!(!blockchain.verify_chain());
     }
 

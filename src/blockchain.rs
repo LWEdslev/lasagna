@@ -17,7 +17,7 @@ pub struct Blockchain {
     pub(super) ledger: Ledger,                  // this should follow the best_path_heads state
     pub(super) root_accounts: Vec<RsaPublicKey>,
     pub(super) orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks
-    pub(super) transaction_buffer: Vec<Transaction>,
+    pub(super) transaction_buffer: Vec<Transaction>, // TODO(before pre-alpha) this should be a HashMap<Timeslot, Vec<Transaction>>
     start_time: u128,
 }
 
@@ -199,7 +199,6 @@ impl Blockchain {
 
     pub fn add_transaction(&mut self, transaction: Transaction) {
         if transaction.verify_signature()
-            && transaction.timeslot >= self.get_latest_block().timeslot
             && self.ledger.is_transaction_possible(&transaction)
         {
             self.transaction_buffer.push(transaction);

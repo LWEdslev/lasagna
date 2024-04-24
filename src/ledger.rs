@@ -101,7 +101,6 @@ impl Ledger {
             return false;
         };
         let from: &RsaPublicKey = transaction.from.as_ref();
-        let to: &RsaPublicKey = transaction.to.as_ref();
         let amount = transaction.amount;
 
         let Some(from_balance) = self.map.get(from) else {
@@ -113,7 +112,7 @@ impl Ledger {
         }
 
         if self.previous_transactions.contains(&transaction.hash) {
-            return false;
+            return false; // if we have already proccessed this
         }
 
         true

@@ -79,7 +79,6 @@ impl Block {
     fn verify_transactions(&self, previous_transactions: &HashSet<[u8; 32]>) -> bool {
         self.transactions.iter().all(|t| {
             t.verify_signature()
-                && t.timeslot < self.timeslot
                 && !previous_transactions.contains(&t.hash)
         })
     }

@@ -1,17 +1,20 @@
 use std::{collections::HashSet, marker::PhantomData, net::SocketAddr, time::Duration};
 
-use crate::{pippi::{
-    connectionmap::ConnectionMap,
-    flooding_set_actor::FloodingSetHandle,
-    heartbeat::HeartbeatHandle,
-    message_handling::{DefaultMessageHandlingStrategy, MessageHandlingStrategy},
-    peerset::Peerset,
-    reading_actor::ReadingActorHandle,
-    writing_actor::WritingActorHandle,
-    Message, MessageContent, PippiError, Result, MAX_PEERS, PEER_WALK_DEPTH, THROTTLE_MESSAGES,
-    THROTTLE_PERIOD,
-}, ExternalMessage};
 use crate::ClientMessage;
+use crate::{
+    pippi::{
+        connectionmap::ConnectionMap,
+        flooding_set_actor::FloodingSetHandle,
+        heartbeat::HeartbeatHandle,
+        message_handling::{DefaultMessageHandlingStrategy, MessageHandlingStrategy},
+        peerset::Peerset,
+        reading_actor::ReadingActorHandle,
+        writing_actor::WritingActorHandle,
+        Message, MessageContent, PippiError, Result, MAX_PEERS, PEER_WALK_DEPTH, THROTTLE_MESSAGES,
+        THROTTLE_PERIOD,
+    },
+    ExternalMessage,
+};
 use rand::Rng;
 use tokio::{
     net::{unix::pipe::Receiver, TcpStream},
@@ -258,6 +261,7 @@ where
         });
     }
 
+    /// Used for flooding blockchain messages, such as transaction or block
     pub async fn flood(&self, message: ExternalMessage) {
         let message = Message::new_flood_message(&self.address, MessageContent::App(message));
         let peers = self.peerset.get_copy().await;
@@ -266,6 +270,14 @@ where
                 .await
                 .unwrap_or_else(|_| println!("unable to flood message"));
         }
+    }
+
+    /// Used for sending a direct blockchain message such as a bootstrap
+    pub async fn send_direct_client_message(&self, to: SocketAddr, message: ExternalMessage) {
+        let message = Message::new_direct_message(&self.address, MessageContent::App(message));
+        self.send_to(&message, &to)
+            .await
+            .unwrap_or_else(|_| println!("unable to send direct client message"));
     }
 
     fn run_heartbeat_protocol(&self) {
