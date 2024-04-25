@@ -62,7 +62,7 @@ impl Blockchain {
     /// Returns whether the new block extends the best path
     pub fn add_block(&mut self, block: Block) -> bool {
         if !block.verify_signature() {
-            dbg!("signature invalid");
+            println!("signature invalid");
             return false;
         }
         let depth = block.depth as usize;
@@ -91,6 +91,10 @@ impl Blockchain {
 
         // we check the timeslot
         if block.timeslot <= parent_block.timeslot || block.timeslot > self.calculate_timeslot(){
+            println!("signature timeslot mismatch");
+            dbg!(block.timeslot);
+            dbg!(parent_block.timeslot);
+            dbg!(self.calculate_timeslot());
             return false;
         }
 
@@ -108,7 +112,8 @@ impl Blockchain {
             .expect("unreachable")
             .insert(block.hash.clone(), block.clone());
 
-        self.transaction_buffer.clear();
+        // remove all transactions from the buffer that are in the block
+        self.transaction_buffer.retain(|t| !block.transactions.contains(t));
 
         // we check if this is the new best path
         let (old_best_path, old_depth) = self.best_path_head;
@@ -161,6 +166,9 @@ impl Blockchain {
     }
 
     fn calculate_timeslot(&self) -> Timeslot {
+        #[cfg(feature = "max_timeslot")]
+        return u64::MAX;
+
         let now = crate::get_unix_timestamp();
         let start = self.start_time;
         let timeslot = (now - start) / 10;
@@ -197,11 +205,16 @@ impl Blockchain {
         )
     }
 
-    pub fn add_transaction(&mut self, transaction: Transaction) {
+    pub fn add_transaction(&mut self, transaction: Transaction) -> bool {
         if transaction.verify_signature()
             && self.ledger.is_transaction_possible(&transaction)
         {
             self.transaction_buffer.push(transaction);
+            println!("transaction added to buffer");
+            true
+        } else {
+            println!("invalid transaction");
+            false
         }
     }
 
@@ -223,6 +236,7 @@ impl Blockchain {
                     self.ledger.rollback_reward(to_ptr.draw.signed_by.as_ref());
                     for t in from_ptr.transactions.iter() {
                         self.ledger.rollback_transaction(t);
+                        self.transaction_buffer.push(t.clone()); // we have to readd the transactions to the buffer
                     }
                     break; // we have reached the genesis block
                 }

@@ -79,6 +79,8 @@ pub enum ClientMessage {
     Won(Block),
     BalanceOf(RsaPublicKey, u64),
     External(ExternalMessage),
+    CLI(CLIMessage),
+    Ping
 }
 
 /// Messages received on the network
@@ -89,6 +91,12 @@ pub enum ExternalMessage {
     BroadcastBlock(Block), // a won block
 }
 
+impl From<ExternalMessage> for ClientMessage {
+    fn from(value: ExternalMessage) -> Self {
+        ClientMessage::External(value)
+    }
+}
+
 // messages from the CLI to the client 
 #[derive(Clone, Debug)]
 pub enum CLIMessage {
@@ -96,9 +104,9 @@ pub enum CLIMessage {
     CheckBalance(RsaPublicKey),
 }
 
-impl From<ExternalMessage> for ClientMessage {
-    fn from(value: ExternalMessage) -> Self {
-        ClientMessage::External(value)
+impl From<CLIMessage> for ClientMessage {
+    fn from(value: CLIMessage) -> Self {
+        ClientMessage::CLI(value)
     }
 }
 
@@ -108,6 +116,8 @@ pub enum LasseCoinError {
     NetworkError,
     #[error("Error occured when using the CLI")]
     CLIError,
+    #[error("Invalid pem")]
+    InvalidPem,
 }
 
 pub type Result<T> = std::result::Result<T, LasseCoinError>;
@@ -203,7 +213,7 @@ mod tests {
         assert!(!ledger.process_transaction(&transaction)); // invalid signature
     }
 
-    #[cfg(feature = "always_win")]
+    #[cfg(all(feature = "always_win", feature = "max_timeslot"))]
     #[test]
     fn test_blockchain_rollback() {
         let (sk1, vk1) = generate_keypair();
@@ -370,7 +380,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "always_win")]
+    #[cfg(all(feature = "always_win", feature = "max_timeslot"))]
     #[test]
     fn test_orphanage() {
         let (sk1, vk1) = generate_keypair();
@@ -497,7 +507,7 @@ mod tests {
         assert!(!blockchain.verify_chain());
     }
 
-    #[cfg(feature = "always_win")]
+    #[cfg(all(feature = "always_win", feature = "max_timeslot"))]
     #[test]
     fn test_illegal_ledger() {
         let (sk1, vk1) = generate_keypair();
@@ -545,7 +555,8 @@ mod tests {
             vk4.clone().into(),
         ], &sk1);
 
-        let mut block = Block::new(1, blockchain.best_path_head.0, 1, vk1.clone(), Vec::new(), &sk1);
+        let illegal_transaction = Transaction::new(vk2, vk1.clone(), &sk1, 3);
+        let mut block = Block::new(0, blockchain.best_path_head.0, 1, vk1.clone(), vec![illegal_transaction], &sk1);
         loop {
             if blockchain.stake(&block, vk1.as_ref()) {
                 block.increment_timeslot();
@@ -555,7 +566,6 @@ mod tests {
         }
 
         assert!(blockchain.verify_chain());
-        blockchain.add_block(block);
-        assert!(!blockchain.verify_chain());
+        assert!(!blockchain.add_block(block));
     }
 }
