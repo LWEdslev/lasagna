@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 
 use block::Block;
 use blockchain::Blockchain;
+use clap::Parser;
+use draw::Draw;
 use ledger::Ledger;
 use num_bigint::BigUint;
 use rand::thread_rng;
@@ -30,6 +32,44 @@ pub const SLOT_LENGTH: u128 = 100; // TODO Increase to 10_000 aka 10 sec
 pub(crate) type Timeslot = u64;
 pub(crate) type Address = VerifyingKey<Sha256>;
 
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub static ref ARGS: MainArgs = MainArgs::parse();
+    pub static ref WALLETS: String = {
+        match MainArgs::parse() {
+            MainArgs::Root(a) => a.wallets,
+            MainArgs::Regular(a) => a.wallets,
+        }
+    };
+}
+
+#[derive(Parser, Clone)]
+pub enum MainArgs {
+    Root(RootArgs),
+    Regular(RegArgs),
+}
+
+#[derive(Parser, Clone)]
+pub struct RootArgs {
+    #[arg(short, long)]
+    pub addr: SocketAddr,
+    #[arg(short, long)]
+    pub root: String, 
+    #[arg(short, long)]
+    pub wallets: String, 
+}
+
+#[derive(Parser, Clone)]
+pub struct RegArgs {
+    #[arg(short, long)]
+    pub addr: SocketAddr,
+    #[arg(short, long)]
+    pub seed_addr: SocketAddr,
+    #[arg(short, long)]
+    pub wallets: String,
+}
+
 pub fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
     let mut rng = thread_rng();
 
@@ -43,7 +83,7 @@ pub fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
     (signing_key, verifying_key)
 }
 
-fn is_winner(ledger: &Ledger, block: &Block, wallet: &RsaPublicKey) -> bool {
+fn is_winner(ledger: &Ledger, draw: Draw, wallet: &RsaPublicKey) -> bool {
     #[cfg(feature = "always_win")]
     return true;
 
@@ -62,7 +102,7 @@ fn is_winner(ledger: &Ledger, block: &Block, wallet: &RsaPublicKey) -> bool {
         (hardness.clone() * total_money) + (balance * (max_hash.clone() - hardness.clone()));
 
     // We win if we have a good draw and a big enough fraction of the money
-    block.draw.value.clone() * mult_factor > hardness * total_money * max_hash.clone()
+    draw.value.clone() * mult_factor > hardness * total_money * max_hash.clone()
 }
 
 pub fn get_unix_timestamp() -> u128 {
@@ -558,7 +598,8 @@ mod tests {
         let illegal_transaction = Transaction::new(vk2, vk1.clone(), &sk1, 3);
         let mut block = Block::new(0, blockchain.best_path_head.0, 1, vk1.clone(), vec![illegal_transaction], &sk1);
         loop {
-            if blockchain.stake(&block, vk1.as_ref()) {
+            let draw = blockchain.get_draw(&sk1);
+            if blockchain.stake(draw, vk1.as_ref()) {
                 block.increment_timeslot();
             } else { 
                 break;

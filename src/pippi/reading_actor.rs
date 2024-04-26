@@ -26,7 +26,7 @@ impl ReadingActor {
     }
 
     async fn read(reader: &mut OwnedReadHalf) -> Result<Message> {
-        let mut length_buf = [0; 4];
+        let mut length_buf = [0; 8];
         reader
             .readable()
             .await
@@ -35,7 +35,7 @@ impl ReadingActor {
             .read_exact(&mut length_buf)
             .await
             .map_err(|_| PippiError::ReadingActorError)?;
-        let length = u32::from_be_bytes(length_buf);
+        let length = u64::from_be_bytes(length_buf);
         let mut buf = vec![0; length as usize];
         let n = reader
             .read_exact(&mut buf)

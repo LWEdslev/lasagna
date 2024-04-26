@@ -26,7 +26,7 @@ impl Ledger {
     }
 
     pub fn get_balance(&self, account: &RsaPublicKey) -> u64 {
-        *self.map.get(account).unwrap()
+        *self.map.get(account).unwrap_or(&0)
     }
 
     pub fn reward_winner(&mut self, winner: &RsaPublicKey, amount: u64) {

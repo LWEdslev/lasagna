@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use rsa::{pss::SigningKey, sha2::Sha256, RsaPrivateKey, RsaPublicKey};
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     oneshot,
@@ -13,9 +13,9 @@ use crate::{
 struct BlockchainActor {
     sending_channel: tokio::sync::mpsc::Sender<ClientMessage>,
     blockchain: Blockchain,
-    mining_block: Block,
     account: RsaPublicKey,
     account_sk: RsaPrivateKey,
+    signing_key: SigningKey<Sha256>,
 }
 
 impl BlockchainActor {
@@ -25,13 +25,13 @@ impl BlockchainActor {
         account_sk: RsaPrivateKey,
         sending_channel: tokio::sync::mpsc::Sender<ClientMessage>,
     ) -> Self {
-        let mining_block = blockchain.create_mining_block(account.clone(), &account_sk);
+        let signing_key = account_sk.clone().into();
         Self {
             sending_channel,
             blockchain,
-            mining_block,
             account,
             account_sk,
+            signing_key,
         }
     }
 
@@ -40,11 +40,9 @@ impl BlockchainActor {
         match msg {
             AddTransaction(t) => {
                 self.blockchain.add_transaction(t.clone());
-                self.mining_block.transactions.push(t); 
             }
             AddBlock(b) => {
                 self.blockchain.add_block(b);
-                self.blockchain.update_mining_block(&mut self.mining_block);
             }
             CheckBalance(pk) => {
                 let balance = self.blockchain.get_balance(&pk);
@@ -54,18 +52,14 @@ impl BlockchainActor {
                     .unwrap();
             }
             Stake => {
-                self.blockchain
-                    .update_mining_block_timeslot(&mut self.mining_block);
-                self.mining_block.set_draw(&self.account_sk.clone().into());
-                if self.blockchain.stake(&self.mining_block, &self.account) {
-                    self.mining_block
-                        .sign_and_rehash(&self.account_sk.clone().into());
-                    if self.blockchain.add_block(self.mining_block.clone()) {
+                let draw = self.blockchain.get_draw(&self.signing_key);
+                if self.blockchain.stake(draw.clone(), &self.account) {
+                    let block = self.blockchain.get_new_block(draw.clone(), &self.signing_key);
+                    if self.blockchain.add_block(block.clone()) {
                         self.sending_channel
-                            .send(ClientMessage::Won(self.mining_block.clone()))
+                            .send(ClientMessage::Won(block.clone()))
                             .await
                             .unwrap();
-                        self.blockchain.update_mining_block(&mut self.mining_block);
                     }
                 } else {
                     //println!("lost a stake whomp whomp");

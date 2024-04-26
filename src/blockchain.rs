@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
+use rsa::signature::Keypair;
 use rsa::RsaPrivateKey;
 use rsa::{pss::SigningKey, sha2::Sha256, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::draw::Draw;
 use crate::Timeslot;
 use crate::{
     block::Block, is_winner, ledger::Ledger, transaction::Transaction, BLOCK_REWARD, ROOT_AMOUNT,
@@ -272,8 +274,8 @@ impl Blockchain {
     }
 
     /// Simply checks if you've won
-    pub fn stake(&self, block: &Block, wallet: &RsaPublicKey) -> bool {
-        is_winner(&self.ledger, block, wallet)
+    pub fn stake(&self, draw: Draw, wallet: &RsaPublicKey) -> bool {
+        is_winner(&self.ledger, draw, wallet)
     }
 
     fn proccess_transactions(&mut self, transactions: &Vec<Transaction>) {
@@ -362,7 +364,7 @@ impl Blockchain {
             };
 
             let winner = block.draw.signed_by.as_ref();
-            if !is_winner(&track_ledger, block, winner) {
+            if !is_winner(&track_ledger, block.draw.clone(), winner) {
                 println!("false winner");
                 return false;
             }
@@ -424,15 +426,19 @@ impl Blockchain {
     pub fn get_best_hash(&self) -> [u8; 32] {
         self.best_path_head.0
     }
-    
-    pub(crate) fn update_mining_block(&self, mining_block: &mut Block) {
-        let (best_hash, best_depth) = self.best_path_head;
-        mining_block.depth = best_depth + 1;
-        mining_block.prev_hash = best_hash;
-        mining_block.transactions = self.transaction_buffer.clone();
+
+    pub fn get_draw(&self, sk: &SigningKey<Sha256>) -> Draw {
+        Draw::new(self.calculate_timeslot(), sk.verifying_key(), sk, self.get_best_hash())
     }
     
-    pub(crate) fn update_mining_block_timeslot(&self, mining_block: &mut Block) {
-        mining_block.timeslot = self.calculate_timeslot();
+    pub(crate) fn get_new_block(&self, draw: Draw, sk: &SigningKey<Sha256>) -> Block {
+        Block::new(
+            draw.timeslot,
+            draw.prev_hash,
+            self.best_path_head.1 + 1,
+            draw.signed_by.clone(),
+            self.transaction_buffer.clone(),
+            &sk,
+        )
     }
 }

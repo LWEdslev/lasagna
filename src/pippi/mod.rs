@@ -29,7 +29,7 @@ pub enum PippiError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Serde error: {0}")]
-    Serde(#[from] serde_json::Error),
+    Serde(#[from] bincode::Error),
     #[error("Reading actor error")]
     ReadingActorError,
     #[error("Writing actor error")]
@@ -94,15 +94,11 @@ impl Message {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Ok(serde_json::from_slice(bytes)?)
+        Ok(bincode::deserialize(bytes)?)
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_string(&self)?
-            .trim()
-            .chars()
-            .map(|c| c as _)
-            .collect())
+        Ok(bincode::serialize(&self)?)
     }
 }
 

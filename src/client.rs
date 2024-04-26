@@ -1,6 +1,10 @@
 // we create a client, this is where we combine the network with the core and the cli and handle the messages passed between these actors
 
-use std::{fs::ReadDir, net::SocketAddr};
+use std::{
+    fs::{self, ReadDir},
+    io::Write,
+    net::SocketAddr,
+};
 
 use rsa::{
     pkcs1::EncodeRsaPublicKey, pkcs8::der::zeroize::Zeroizing, rand_core::block, RsaPrivateKey,
@@ -12,7 +16,7 @@ use crate::{
     blockchain::{self, Blockchain},
     blockchain_actor::BlockchainActorHandle,
     network_actor::NetworkHandle,
-    CLIMessage, ClientMessage, ExternalMessage,
+    CLIMessage, ClientMessage, ExternalMessage, WALLETS,
 };
 
 pub struct ClientActor {
@@ -23,19 +27,20 @@ pub struct ClientActor {
 }
 
 impl ClientActor {
-    pub async fn run_root(addr: SocketAddr, root_accounts: Vec<RsaPublicKey>, wallets_dir: String) {
+    pub async fn run_root(addr: SocketAddr, root_accounts: Vec<RsaPublicKey>) {
         println!("Please enter your seed phrase:");
-        let seed_phrase = Zeroizing::new(crate::cli::read_line());
+        let seed_phrase = Zeroizing::new(crate::cli::read_line().await);
         let sk = crate::cli::key_from_seedphrase(&seed_phrase).expect("key from seedphrase failed");
 
         let (tx, rx) = mpsc::channel(100);
         let network = NetworkHandle::new(addr, addr, tx.clone());
 
         let blockchain = Blockchain::start(root_accounts, &sk.clone().into());
+
         let blockchain_handle =
             BlockchainActorHandle::new(blockchain, sk.to_public_key(), sk.clone(), tx.clone());
 
-        crate::cli::run_cli(tx.clone(), wallets_dir);
+        crate::cli::run_cli(tx.clone());
         ClientActor::read_messages(
             Self {
                 priv_key: sk,
@@ -49,7 +54,7 @@ impl ClientActor {
 
     pub async fn run(seed_addr: SocketAddr, addr: SocketAddr) {
         println!("Please enter your seed phrase:");
-        let seed_phrase = Zeroizing::new(crate::cli::read_line());
+        let seed_phrase = Zeroizing::new(crate::cli::read_line().await);
         let sk = crate::cli::key_from_seedphrase(&seed_phrase).expect("key from seedphrase failed");
 
         let (tx, rx) = mpsc::channel(100);
@@ -59,8 +64,7 @@ impl ClientActor {
             .await
             .expect("unable to send Request Bootstrap message");
 
-            todo!("fix string");
-        crate::cli::run_cli(tx.clone(), String::new());
+        crate::cli::run_cli(tx.clone());
 
         ClientActor::read_messages(
             Self {
@@ -85,16 +89,14 @@ impl ClientActor {
     async fn handle_message(&mut self, msg: ClientMessage) {
         match msg {
             ClientMessage::Won(block) => {
-                println!("We won a block");
+                //println!("We won a block");
                 self.network.broadcast_block(block).await.unwrap();
             }
             ClientMessage::BalanceOf(wallet, balance) => {
-                println!("Wallet {} has {} lassecoins", wallet.to_pkcs1_pem(rsa::pkcs8::LineEnding::CRLF).unwrap().to_string(), balance);
+                println!("Wallet has {} lassecoins", balance);
             }
             ClientMessage::External(ext_msg) => self.handle_external_message(ext_msg).await,
-            ClientMessage::CLI(cli_msg) => {
-                self.handle_cli_message(cli_msg).await
-            }
+            ClientMessage::CLI(cli_msg) => self.handle_cli_message(cli_msg).await,
             ClientMessage::Ping => println!("Ping"),
         }
     }
@@ -124,6 +126,7 @@ impl ClientActor {
                         )
                         .await
                         .unwrap();
+                    println!("Sent bootstrap to {from:?}");
                 }
             }
             ExternalMessage::BroadcastBlock(block) => {

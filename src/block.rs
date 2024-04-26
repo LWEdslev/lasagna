@@ -111,8 +111,8 @@ impl Block {
     ) -> String {
         // we can just use the hashes and the signatures of these to save a lot of space while preserving safety
         let transactions =
-            serde_json::to_string(&transactions.iter().map(|t| t.hash).collect::<Vec<_>>())
-                .unwrap();
+            hex::encode(bincode::serialize(&transactions.iter().map(|t| t.hash).collect::<Vec<_>>())
+                .unwrap());
         let draw = hex::encode(draw.signature.to_bytes());
         format!("{timeslot}{prev_hash:?}{depth}{draw}{transactions}")
     }

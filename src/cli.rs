@@ -7,18 +7,21 @@ use rand_chacha::ChaCha20Rng;
 use rsa::{
     pkcs1::EncodeRsaPublicKey, pkcs8::{der::zeroize::Zeroizing, DecodePublicKey}, RsaPrivateKey, RsaPublicKey
 };
-use tokio::sync::mpsc::Sender;
+use tokio::{io::BufReader, sync::mpsc::Sender};
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncBufRead;
 
-use crate::{transaction::Transaction, CLIMessage, ClientMessage, LasseCoinError, Result};
+use crate::{transaction::Transaction, CLIMessage, ClientMessage, LasseCoinError, Result, ARGS, WALLETS};
 
-pub(crate) fn read_line() -> String {
+pub(crate) async fn read_line() -> String {
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).unwrap();
+    let mut reader = BufReader::new(tokio::io::stdin());
+    reader.read_line(&mut line).await.unwrap();
     line.trim().to_string()
 }
 
-fn read_input(wallets_dir: String) -> Result<CLIMessage> {
-    let tokens = read_line()
+async fn read_input() -> Result<CLIMessage> {
+    let tokens = read_line().await
         .split_ascii_whitespace()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -30,28 +33,28 @@ fn read_input(wallets_dir: String) -> Result<CLIMessage> {
 
     match first_token.as_str() {
         "transaction" => {
-            return read_transaction(&mut tokens, wallets_dir).map(|t| CLIMessage::PostTransaction(t))
+            return read_transaction(&mut tokens).await.map(|t| CLIMessage::PostTransaction(t))
         }
         "balance" => {
-            let public_key = read_public_key_pem(tokens.next().ok_or(LasseCoinError::CLIError)?, wallets_dir)?;
+            let public_key = read_public_key_pem(tokens.next().ok_or(LasseCoinError::CLIError)?, WALLETS.clone())?;
             return Ok(CLIMessage::CheckBalance(public_key));
         }
         _ => return Err(LasseCoinError::CLIError),
     }
 }
 
-fn read_transaction(tokens: &mut impl Iterator<Item = String>, wallets_dir: String) -> Result<Transaction> {
+async fn read_transaction(tokens: &mut impl Iterator<Item = String>) -> Result<Transaction> {
     let Some(amount_token) = tokens.next() else {
         return Err(LasseCoinError::CLIError);
     };
 
     let amount: u64 = amount_token.parse().map_err(|_| LasseCoinError::CLIError)?;
 
-    let receiver = read_public_key_pem(tokens.next().ok_or(LasseCoinError::CLIError)?, wallets_dir)?;
+    let receiver = read_public_key_pem(tokens.next().ok_or(LasseCoinError::CLIError)?, WALLETS.clone())?;
 
     // we request the seed phrase from the user
     println!("Please enter your seed phrase to authenticate the transaction:");
-    let seed_phrase = Zeroizing::new(read_line());
+    let seed_phrase = Zeroizing::new(read_line().await);
     let sk = key_from_seedphrase(&seed_phrase)?;
     println!("Transaction signed successfully");
     Ok(Transaction::new(
@@ -79,11 +82,11 @@ pub fn key_from_seedphrase(seedphrase: &Zeroizing<String>) -> Result<RsaPrivateK
 }
 
 // a function to run the command line interface as a separate task
-pub fn run_cli(client_tx: Sender<ClientMessage>, wallets_dir: String) {
+pub fn run_cli(client_tx: Sender<ClientMessage>) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            let message: Result<_> = read_input(wallets_dir.clone());
+            let message: Result<_> = read_input().await;
             let client_tx = client_tx.clone(); // this is a cheap clone
             
             // we need this task otherwise the reading will block the sending 

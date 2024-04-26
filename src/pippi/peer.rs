@@ -217,6 +217,7 @@ where
             writer.send_message(message.clone()).await?;
             Ok(())
         } else {
+            panic!();
             Err(PippiError::NotFound)
         }
     }

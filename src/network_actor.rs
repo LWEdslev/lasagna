@@ -46,9 +46,11 @@ impl NetworkActor {
                     .await;
             }
             Bootstrap(to, blockchain) => {
+                println!("inner bootstrap to {to:?}");
                 self.peer
                     .send_direct_client_message(to, ExternalMessage::Bootstrap(blockchain))
                     .await;
+                println!("inner sent bootstrap");
             }
         }
     }
