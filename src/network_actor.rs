@@ -4,7 +4,8 @@ use crate::{
     block::Block,
     blockchain::Blockchain,
     pippi::{message_handling::DefaultMessageHandlingStrategy, peer::Peer, PippiError},
-    ExternalMessage, LasseCoinError,
+    transaction::Transaction,
+    ExternalMessage, Error,
 };
 use tokio::sync::mpsc::Sender;
 
@@ -46,11 +47,14 @@ impl NetworkActor {
                     .await;
             }
             Bootstrap(to, blockchain) => {
-                println!("inner bootstrap to {to:?}");
                 self.peer
                     .send_direct_client_message(to, ExternalMessage::Bootstrap(blockchain))
                     .await;
-                println!("inner sent bootstrap");
+            }
+            BroadcastTransaction(t) => {
+                self.peer
+                    .flood(ExternalMessage::BroadcastTransaction(t))
+                    .await;
             }
         }
     }
@@ -59,6 +63,7 @@ impl NetworkActor {
 enum NetworkActorMessage {
     RequestBootstrap,
     BroadcastBlock(Block),
+    BroadcastTransaction(Transaction),
     Bootstrap(SocketAddr, Blockchain),
 }
 
@@ -85,14 +90,14 @@ impl NetworkHandle {
         self.sender
             .send(NetworkActorMessage::RequestBootstrap)
             .await
-            .map_err(|_| LasseCoinError::NetworkError)
+            .map_err(|_| Error::NetworkError)
     }
 
     pub async fn broadcast_block(&self, block: Block) -> crate::Result<()> {
         self.sender
             .send(NetworkActorMessage::BroadcastBlock(block))
             .await
-            .map_err(|_| LasseCoinError::NetworkError)
+            .map_err(|_| Error::NetworkError)
     }
 
     pub async fn send_bootstraping_message_to(
@@ -103,6 +108,16 @@ impl NetworkHandle {
         self.sender
             .send(NetworkActorMessage::Bootstrap(to, blockchain))
             .await
-            .map_err(|_| LasseCoinError::NetworkError)
+            .map_err(|_| Error::NetworkError)
+    }
+
+    pub async fn broadcast_transaction(
+        &self,
+        transaction: crate::transaction::Transaction,
+    ) -> crate::Result<()> {
+        self.sender
+            .send(NetworkActorMessage::BroadcastTransaction(transaction))
+            .await
+            .map_err(|_| Error::NetworkError)
     }
 }

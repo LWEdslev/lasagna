@@ -1,14 +1,14 @@
 use std::{net::SocketAddr, time::Duration};
 
 use clap::Parser;
-use lassecoin::{client::ClientActor, RootArgs};
+use lasagna::{client::ClientActor, MainArgs, RootArgs, ARGS};
 use rsa::{pkcs8::DecodePublicKey, RsaPublicKey};
 
 #[tokio::main]
 async fn main() {
-    let args: RootArgs = match lassecoin::ARGS.clone() {
-        lassecoin::MainArgs::Root(a) => a,
-        lassecoin::MainArgs::Regular(_) => panic!("Use root arguments"),
+    let args: RootArgs = match ARGS.clone() {
+        MainArgs::Root(a) => a,
+        MainArgs::Regular(_) => panic!("Use root arguments"),
     };
 
     // read the root accounts files in the path_to_root_accounts

@@ -346,7 +346,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lassecoin"
+name = "lasagna"
 version = "0.1.0"
 dependencies = [
  "arrayref",

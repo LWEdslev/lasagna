@@ -93,7 +93,7 @@ impl ClientActor {
                 self.network.broadcast_block(block).await.unwrap();
             }
             ClientMessage::BalanceOf(wallet, balance) => {
-                println!("Wallet has {} lassecoins", balance);
+                println!("Wallet has {} las", balance);
             }
             ClientMessage::External(ext_msg) => self.handle_external_message(ext_msg).await,
             ClientMessage::CLI(cli_msg) => self.handle_cli_message(cli_msg).await,
@@ -134,7 +134,12 @@ impl ClientActor {
                 if let Some(ref blockchain_handle) = self.blockchain {
                     blockchain_handle.add_block(block).await;
                 }
-            }
+            },
+            ExternalMessage::BroadcastTransaction(t) => {
+                if let Some(ref blockchain_handle) = self.blockchain {
+                    blockchain_handle.add_transaction(t).await;
+                }
+            },
         }
     }
 
@@ -142,9 +147,10 @@ impl ClientActor {
         match cli_msg {
             CLIMessage::PostTransaction(transaction) => {
                 if let Some(ref blockchain) = self.blockchain {
+                    self.network.broadcast_transaction(transaction.clone()).await.unwrap();
                     blockchain.add_transaction(transaction).await;
                 }
-            }
+            },
             CLIMessage::CheckBalance(wallet) => {
                 if let Some(ref blockchain) = self.blockchain {
                     blockchain.check_balance(wallet).await;

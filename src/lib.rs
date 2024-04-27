@@ -128,6 +128,7 @@ pub enum ClientMessage {
 pub enum ExternalMessage {
     Bootstrap(Blockchain), // if we need a blockchain to start off on we take this one
     BootstrapReqFrom(SocketAddr), // someone needs a blockchain 
+    BroadcastTransaction(Transaction),
     BroadcastBlock(Block), // a won block
 }
 
@@ -151,7 +152,7 @@ impl From<CLIMessage> for ClientMessage {
 }
 
 #[derive(Error, Debug)]
-pub enum LasseCoinError {
+pub enum Error {
     #[error("Error occured in the network actor")]
     NetworkError,
     #[error("Error occured when using the CLI")]
@@ -160,7 +161,7 @@ pub enum LasseCoinError {
     InvalidPem,
 }
 
-pub type Result<T> = std::result::Result<T, LasseCoinError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
