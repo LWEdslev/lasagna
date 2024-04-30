@@ -1,16 +1,15 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use clap::Parser;
-use lasagna::{client::ClientActor, MainArgs, RegArgs, ARGS};
+use lasagna::{client::ClientActor, ADDR, SEED_ADDR, WALLETS};
 
 #[tokio::main]
 async fn main() {
-    let args: RegArgs = match ARGS.clone() {
-        MainArgs::Root(_) => panic!("must provide regular args"),
-        MainArgs::Regular(a) => a,
-    };
+    let _ = *ADDR;
+    let _ = *SEED_ADDR;
+    let _ = *WALLETS;
 
-    ClientActor::run(args.seed_addr, args.addr).await;
+    ClientActor::run(*SEED_ADDR, *ADDR).await;
 
     loop {
         tokio::time::sleep(Duration::from_secs(100)).await;

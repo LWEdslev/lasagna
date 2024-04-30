@@ -106,6 +106,7 @@ impl ClientActor {
             ExternalMessage::Bootstrap(blockchain) => {
                 println!("Blockchain bootstrapped");
                 if self.blockchain.is_none() {
+                    if !blockchain.verify_chain() { println!("Received invalid blockchain"); return };
                     let account_sk = self.priv_key.clone();
                     let blockchain = BlockchainActorHandle::new(
                         blockchain,
@@ -130,7 +131,6 @@ impl ClientActor {
                 }
             }
             ExternalMessage::BroadcastBlock(block) => {
-                println!("Received a block");
                 if let Some(ref blockchain_handle) = self.blockchain {
                     blockchain_handle.add_block(block).await;
                 }
@@ -147,6 +147,7 @@ impl ClientActor {
         match cli_msg {
             CLIMessage::PostTransaction(transaction) => {
                 if let Some(ref blockchain) = self.blockchain {
+                    let transaction = transaction.to_transaction(&self.priv_key);
                     self.network.broadcast_transaction(transaction.clone()).await.unwrap();
                     blockchain.add_transaction(transaction).await;
                 }

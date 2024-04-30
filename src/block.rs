@@ -89,7 +89,6 @@ impl Block {
         let signature = self.verify_signature();
         let transactions = self.verify_transactions(previous_transactions);
         let winner = self.verify_winner();
-        println!("s {signature}, t {transactions}, w {winner}");
         signature && transactions && winner
     }
 

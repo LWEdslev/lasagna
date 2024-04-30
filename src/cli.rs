@@ -1,17 +1,19 @@
-use std::{fs::ReadDir, time::Duration};
+use std::{fs::ReadDir, path::{Path, PathBuf}, time::Duration};
 
 use arrayref::array_ref;
 use bip39::{Language, Mnemonic, MnemonicType, Seed};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rsa::{
-    pkcs1::EncodeRsaPublicKey, pkcs8::{der::zeroize::Zeroizing, DecodePublicKey}, RsaPrivateKey, RsaPublicKey
+    pkcs1::EncodeRsaPublicKey,
+    pkcs8::{der::zeroize::Zeroizing, DecodePublicKey},
+    RsaPrivateKey, RsaPublicKey,
 };
-use tokio::{io::BufReader, sync::mpsc::Sender};
-use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncBufRead;
+use tokio::io::AsyncBufReadExt;
+use tokio::{io::BufReader, sync::mpsc::Sender};
 
-use crate::{transaction::Transaction, CLIMessage, ClientMessage, Error, Result, ARGS, WALLETS};
+use crate::{transaction::Transaction, CLIMessage, ClientMessage, Error, Result, WALLETS};
 
 pub(crate) async fn read_line() -> String {
     let mut line = String::new();
@@ -21,7 +23,8 @@ pub(crate) async fn read_line() -> String {
 }
 
 async fn read_input() -> Result<CLIMessage> {
-    let tokens = read_line().await
+    let tokens = read_line()
+        .await
         .split_ascii_whitespace()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -32,42 +35,48 @@ async fn read_input() -> Result<CLIMessage> {
     };
 
     match first_token.as_str() {
-        "transaction" => {
-            return read_transaction(&mut tokens).await.map(|t| CLIMessage::PostTransaction(t))
+        "send" => {
+            return read_transaction(&mut tokens)
+                .await
+                .map(|t| CLIMessage::PostTransaction(t))
         }
         "balance" => {
-            let public_key = read_public_key_pem(tokens.next().ok_or(Error::CLIError)?, WALLETS.clone())?;
+            let public_key =
+                read_public_key_pem(&tokens.next().ok_or(Error::CLIError)?, WALLETS.clone())?;
             return Ok(CLIMessage::CheckBalance(public_key));
         }
         _ => return Err(Error::CLIError),
     }
 }
 
-async fn read_transaction(tokens: &mut impl Iterator<Item = String>) -> Result<Transaction> {
+async fn read_transaction(tokens: &mut impl Iterator<Item = String>) -> Result<CliPreTransaction> {
     let Some(amount_token) = tokens.next() else {
         return Err(Error::CLIError);
     };
 
     let amount: u64 = amount_token.parse().map_err(|_| Error::CLIError)?;
 
-    let receiver = read_public_key_pem(tokens.next().ok_or(Error::CLIError)?, WALLETS.clone())?;
-
-    // we request the seed phrase from the user
-    println!("Please enter your seed phrase to authenticate the transaction:");
-    let seed_phrase = Zeroizing::new(read_line().await);
-    let sk = key_from_seedphrase(&seed_phrase)?;
-    println!("Transaction signed successfully");
-    Ok(Transaction::new(
-        sk.to_public_key().into(),
-        receiver.into(),
-        &sk.into(),
+    let receiver = read_public_key_pem(&tokens.next().ok_or(Error::CLIError)?, WALLETS.clone())?;
+    Ok(CliPreTransaction {
+        to: receiver.into(),
         amount,
-    ))
+    })
 }
 
-fn read_public_key_pem(name: String, wallets_dir: String) -> Result<RsaPublicKey> {
-    let dir = (wallets_dir + "/" + &name) + ".pem";
-    println!("{dir}");
+#[derive(Clone, Debug)]
+pub(super) struct CliPreTransaction {
+    to: RsaPublicKey,
+    amount: u64,
+}
+
+impl CliPreTransaction {
+    pub(super) fn to_transaction(self, sk: &RsaPrivateKey) -> Transaction {
+        Transaction::new(sk.to_public_key(), self.to, sk, self.amount)
+    }
+}
+
+fn read_public_key_pem(name: &str, wallets_dir: PathBuf) -> Result<RsaPublicKey> {
+    let dir = wallets_dir.join(format!("{name}.pem"));
     let pem = std::fs::read_to_string(dir).map_err(|_| Error::CLIError)?;
     RsaPublicKey::from_public_key_pem(&pem).map_err(|_| Error::CLIError)
 }
@@ -88,11 +97,11 @@ pub fn run_cli(client_tx: Sender<ClientMessage>) {
             tokio::time::sleep(Duration::from_millis(10)).await;
             let message: Result<_> = read_input().await;
             let client_tx = client_tx.clone(); // this is a cheap clone
-            
-            // we need this task otherwise the reading will block the sending 
-            let send_task = async move { 
-            match message {
-                Ok(m) => {
+
+            // we need this task otherwise the reading will block the sending
+            let send_task = async move {
+                match message {
+                    Ok(m) => {
                         client_tx.send(m.into()).await.unwrap();
                     }
                     Err(_) => {
@@ -101,6 +110,6 @@ pub fn run_cli(client_tx: Sender<ClientMessage>) {
                 }
             };
             tokio::spawn(send_task);
-        };
+        }
     });
 }

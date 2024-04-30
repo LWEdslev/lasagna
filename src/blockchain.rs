@@ -16,10 +16,10 @@ use rsa::sha2::Digest;
 pub struct Blockchain {
     pub(super) blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block
     pub(super) best_path_head: ([u8; 32], u64), // the hash and depth of the head of the current best path
-    pub(super) ledger: Ledger, // this should follow the best_path_heads state
+    pub(super) ledger: Ledger,                  // this should follow the best_path_heads state
     pub(super) root_accounts: Vec<RsaPublicKey>,
     pub(super) orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks
-    pub(super) transaction_buffer: HashSet<Transaction>, 
+    pub(super) transaction_buffer: HashSet<Transaction>,
     start_time: u128,
 }
 
@@ -94,7 +94,7 @@ impl Blockchain {
         };
 
         // we check the timeslot
-        if block.timeslot <= parent_block.timeslot || block.timeslot > self.calculate_timeslot(){
+        if block.timeslot <= parent_block.timeslot || block.timeslot > self.calculate_timeslot() {
             println!("signature timeslot mismatch");
             dbg!(block.timeslot);
             dbg!(parent_block.timeslot);
@@ -182,9 +182,7 @@ impl Blockchain {
     }
 
     pub fn add_transaction(&mut self, transaction: Transaction) -> bool {
-        if transaction.verify_signature()
-            && self.ledger.is_transaction_possible(&transaction)
-        {
+        if transaction.verify_signature() && self.ledger.is_transaction_possible(&transaction) {
             self.transaction_buffer.insert(transaction);
             true
         } else {
@@ -327,6 +325,12 @@ impl Blockchain {
                 return false;
             }
 
+            let winner = &block.draw.signed_by;
+            if !is_winner(&track_ledger, block.draw.clone(), winner) {
+                println!("false winner");
+                return false;
+            }
+
             // we process the transactions for the track ledger and they must all be valid
             if !block
                 .transactions
@@ -335,12 +339,6 @@ impl Blockchain {
             {
                 return false;
             };
-
-            let winner = &block.draw.signed_by;
-            if !is_winner(&track_ledger, block.draw.clone(), winner) {
-                println!("false winner");
-                return false;
-            }
 
             track_ledger.reward_winner(winner, BLOCK_REWARD);
 
@@ -401,16 +399,26 @@ impl Blockchain {
     }
 
     pub fn get_draw(&self, sk: &RsaPrivateKey) -> Draw {
-        Draw::new(self.calculate_timeslot(), sk.to_public_key(), sk, self.get_best_hash())
+        Draw::new(
+            self.calculate_timeslot(),
+            sk.to_public_key(),
+            sk,
+            self.get_best_hash(),
+        )
     }
-    
+
     pub(crate) fn get_new_block(&self, draw: Draw, sk: &RsaPrivateKey) -> Block {
+        let mut checking_ledger = self.ledger.clone();
+        let mut transactions_buffer: Vec<_> = self.transaction_buffer.clone().into_iter().collect();
+        // this could cause many transactions in the same block depth to only get a few valid in random order
+        transactions_buffer.retain(|t| checking_ledger.process_transaction(t));
+
         Block::new(
             draw.timeslot,
             draw.prev_hash,
             self.best_path_head.1 + 1,
             draw.signed_by.clone(),
-            self.transaction_buffer.clone().into_iter().collect(),
+            transactions_buffer,
             &sk,
         )
     }

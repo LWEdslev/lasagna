@@ -2,6 +2,7 @@
 name = "lasagna"
 version = "0.1.0"
 edition = "2021"
+default-run = "regular"
 
 [features]
 small_key = []

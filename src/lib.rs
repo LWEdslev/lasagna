@@ -1,8 +1,11 @@
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use block::Block;
 use blockchain::Blockchain;
 use clap::Parser;
+use cli::CliPreTransaction;
 use draw::Draw;
 use ledger::Ledger;
 use num_bigint::BigUint;
@@ -15,6 +18,7 @@ use rsa::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::stdin;
 use transaction::Transaction;
 
 pub mod block;
@@ -38,39 +42,41 @@ pub(crate) type Timeslot = u64;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    pub static ref ARGS: MainArgs = MainArgs::parse();
-    pub static ref WALLETS: String = {
-        match MainArgs::parse() {
-            MainArgs::Root(a) => a.wallets,
-            MainArgs::Regular(a) => a.wallets,
-        }
+    pub static ref ADDR: SocketAddr = {
+        println!("Enter your peer's address (Example 127.0.0.1:8080):");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).unwrap();
+        SocketAddr::from_str(buf.trim()).expect("unable to parse address")
     };
-}
 
-#[derive(Parser, Clone)]
-pub enum MainArgs {
-    Root(RootArgs),
-    Regular(RegArgs),
-}
+    pub static ref SEED_ADDR: SocketAddr = {
+        println!("Enter a seed nodes address (Example 127.0.0.1:8081):");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).unwrap();
+        SocketAddr::from_str(buf.trim()).expect("unable to parse address")
+    };
 
-#[derive(Parser, Clone)]
-pub struct RootArgs {
-    #[arg(short, long)]
-    pub addr: SocketAddr,
-    #[arg(short, long)]
-    pub root: String,
-    #[arg(short, long)]
-    pub wallets: String,
-}
+    pub static ref WALLETS: PathBuf = {
+        println!("Enter path to wallet pems (Example ./wallets):");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).unwrap();
+        let path = Path::new(buf.trim()).to_owned();
+        if !path.exists() {
+            panic!("{path:?} does not exist")
+        }
+        path
+    };
 
-#[derive(Parser, Clone)]
-pub struct RegArgs {
-    #[arg(short, long)]
-    pub addr: SocketAddr,
-    #[arg(short, long)]
-    pub seed_addr: SocketAddr,
-    #[arg(short, long)]
-    pub wallets: String,
+    pub static ref ROOTS: PathBuf = {
+        println!("Enter path to root account pems (Example ./roots):");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).unwrap();
+        let path = Path::new(buf.trim()).to_owned();
+        if !path.exists() {
+            panic!("{path:?} does not exist")
+        }
+        path
+    };
 }
 
 pub fn generate_keypair() -> (RsaPrivateKey, RsaPublicKey) {
@@ -184,7 +190,7 @@ impl From<ExternalMessage> for ClientMessage {
 // messages from the CLI to the client
 #[derive(Clone, Debug)]
 pub enum CLIMessage {
-    PostTransaction(Transaction),
+    PostTransaction(CliPreTransaction),
     CheckBalance(RsaPublicKey),
 }
 

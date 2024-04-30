@@ -27,25 +27,12 @@ impl WritingActor {
     async fn handle_message(&mut self, msg: WritingActorMessage) -> Result<()> {
         match msg {
             WritingActorMessage::Write { message } => {
-                let mut debug_bool = false;
-                match message.content {
-                    crate::pippi::MessageContent::App(ref ext_msg) => {
-                        match ext_msg {
-                            crate::ExternalMessage::Bootstrap(_) => debug_bool = true,
-                            _ => (),
-                        }
-                    },
-                    _ => (),
-                }
-                if debug_bool { println!("yippa"); }
                 let bytes = message.to_bytes()?;
                 self.writer.writable().await?;
-                let length = bytes.len() as u64; // 4 bytes
-                if debug_bool { println!("sending length {length}"); }
+                let length = bytes.len() as u64; // 8 bytes
                 let length_bytes = length.to_be_bytes();
                 self.writer.write_all(&length_bytes).await?;
                 self.writer.write_all(&bytes).await?;
-                if debug_bool { println!("dibbidooo"); }
                 Ok(())
             }
             WritingActorMessage::Kill => {
