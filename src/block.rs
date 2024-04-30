@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
-use crate::{draw::Draw, transaction::Transaction, Address, Timeslot};
+use crate::PssSignature;
+use crate::{draw::Draw, transaction::Transaction, Timeslot};
 use rand::thread_rng;
 use rsa::signature::SignatureEncoding;
 use rsa::signature::Verifier;
+use rsa::RsaPrivateKey;
 use rsa::{
     pkcs1::EncodeRsaPublicKey,
     pss::{Signature, SigningKey},
@@ -20,7 +22,7 @@ pub struct Block {
     pub(super) depth: u64,
     pub(super) transactions: Vec<Transaction>,
     pub(super) draw: Draw,
-    pub(super) signature: Signature,
+    pub(super) signature: PssSignature,
     pub hash: [u8; 32],
 }
 
@@ -29,9 +31,9 @@ impl Block {
         timeslot: Timeslot,
         prev_hash: [u8; 32],
         depth: u64,
-        winner: Address,
+        winner: RsaPublicKey,
         transactions: Vec<Transaction>,
-        sk: &SigningKey<Sha256>,
+        sk: &RsaPrivateKey,
     ) -> Self {
         let mut rng = thread_rng();
         let draw = Draw::new(timeslot, winner.clone(), &sk, prev_hash);
@@ -40,7 +42,7 @@ impl Block {
         let mut hasher = Sha256::new();
         hasher.update(fields_string.as_bytes());
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
-        let signature = sk.sign_with_rng(&mut rng, &hash);
+        let signature = PssSignature::sign(sk, &hash).unwrap();
         Self {
             timeslot,
             prev_hash,
@@ -63,7 +65,7 @@ impl Block {
         let mut hasher = Sha256::new();
         hasher.update(fields_string.as_bytes());
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
-        hash == self.hash && self.draw.signed_by.verify(&hash, &self.signature).is_ok()
+        hash == self.hash && self.signature.verify(&self.draw.signed_by, &hash).is_ok()
     }
 
     fn verify_winner(&self) -> bool {
@@ -121,7 +123,7 @@ impl Block {
         self.timeslot += 1;
     }
 
-    pub(super) fn set_draw(&mut self, sk: &SigningKey<Sha256>) {
+    pub(super) fn set_draw(&mut self, sk: &RsaPrivateKey) {
         self.draw = Draw::new(
             self.timeslot,
             self.draw.signed_by.clone(),
@@ -130,7 +132,7 @@ impl Block {
         );
     }
 
-    pub(super) fn sign_and_rehash(&mut self, sk: &SigningKey<Sha256>) {
+    pub(super) fn sign_and_rehash(&mut self, sk: &RsaPrivateKey) {
         let fields_string = Block::combine_fields_to_string(
             &self.timeslot,
             &self.prev_hash,
@@ -142,7 +144,7 @@ impl Block {
         hasher.update(fields_string.as_bytes());
         let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
         self.hash = hash;
-        self.signature = sk.sign_with_rng(&mut thread_rng(), &hash);
+        self.signature = PssSignature::sign(sk, &hash).unwrap(); 
     }
 
     pub(super) fn rehash(&mut self) {

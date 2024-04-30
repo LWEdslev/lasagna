@@ -7,22 +7,26 @@ use draw::Draw;
 use ledger::Ledger;
 use num_bigint::BigUint;
 use rand::thread_rng;
-use rsa::{pss::{SigningKey, VerifyingKey}, sha2::Sha256, RsaPublicKey};
 use rsa::signature::Keypair;
+use rsa::{
+    pss::{SigningKey, VerifyingKey},
+    sha2::Sha256,
+    RsaPrivateKey, RsaPublicKey,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use transaction::Transaction;
 
 pub mod block;
 pub mod blockchain;
+pub mod blockchain_actor;
+pub mod cli;
+pub mod client;
 pub mod draw;
 pub mod ledger;
-pub mod transaction;
-pub mod blockchain_actor;
 pub mod network_actor;
 pub mod pippi;
-pub mod client;
-pub mod cli;
+pub mod transaction;
 
 pub const TRANSACTION_FEE: u64 = 1;
 pub const BLOCK_REWARD: u64 = 50;
@@ -30,7 +34,6 @@ pub const ROOT_AMOUNT: u64 = 300;
 pub const SLOT_LENGTH: u128 = 100; // TODO Increase to 10_000 aka 10 sec
 
 pub(crate) type Timeslot = u64;
-pub(crate) type Address = VerifyingKey<Sha256>;
 
 use lazy_static::lazy_static;
 
@@ -55,9 +58,9 @@ pub struct RootArgs {
     #[arg(short, long)]
     pub addr: SocketAddr,
     #[arg(short, long)]
-    pub root: String, 
+    pub root: String,
     #[arg(short, long)]
-    pub wallets: String, 
+    pub wallets: String,
 }
 
 #[derive(Parser, Clone)]
@@ -70,7 +73,7 @@ pub struct RegArgs {
     pub wallets: String,
 }
 
-pub fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
+pub fn generate_keypair() -> (RsaPrivateKey, RsaPublicKey) {
     let mut rng = thread_rng();
 
     #[cfg(not(feature = "small_key"))]
@@ -78,9 +81,9 @@ pub fn generate_keypair() -> (SigningKey<Sha256>, VerifyingKey<Sha256>) {
     #[cfg(feature = "small_key")]
     const BITS: usize = 1024;
 
-    let signing_key = SigningKey::random(&mut rng, BITS).unwrap();
-    let verifying_key = signing_key.verifying_key();
-    (signing_key, verifying_key)
+    let sk = RsaPrivateKey::new(&mut rng, BITS).unwrap();
+    let pk = sk.to_public_key();
+    (sk, pk)
 }
 
 fn is_winner(ledger: &Ledger, draw: Draw, wallet: &RsaPublicKey) -> bool {
@@ -113,6 +116,46 @@ pub fn get_unix_timestamp() -> u128 {
         .as_millis()
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Pkcs1v15Signature(Vec<u8>);
+
+impl Pkcs1v15Signature {
+    pub fn sign(sk: &RsaPrivateKey, hashed_data: &[u8]) -> Result<Pkcs1v15Signature> {
+        sk.sign(rsa::Pkcs1v15Sign::new::<Sha256>(), hashed_data)
+            .map(|s| Pkcs1v15Signature(s))
+            .map_err(|_| Error::Pkcs1v15Error)
+    }
+
+    pub fn verify(&self, vk: &RsaPublicKey, hashed_data: &[u8]) -> Result<()> {
+        vk.verify(rsa::Pkcs1v15Sign::new::<Sha256>(), hashed_data, &self.0)
+            .map_err(|_| Error::Pkcs1v15Error)
+    }
+
+    pub fn to_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PssSignature(Vec<u8>);
+
+impl PssSignature {
+    pub fn sign(sk: &RsaPrivateKey, hashed_data: &[u8]) -> Result<PssSignature> {
+        sk.sign_with_rng(&mut thread_rng(), rsa::Pss::new::<Sha256>(), hashed_data)
+            .map(|s| PssSignature(s))
+            .map_err(|_| Error::PssError)
+    }
+
+    pub fn verify(&self, vk: &RsaPublicKey, hashed_data: &[u8]) -> Result<()> {
+        vk.verify(rsa::Pss::new::<Sha256>(), hashed_data, &self.0)
+            .map_err(|_| Error::PssError)
+    }
+
+    pub fn to_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 // messages to the client
 #[derive(Clone, Debug)]
 pub enum ClientMessage {
@@ -120,14 +163,14 @@ pub enum ClientMessage {
     BalanceOf(RsaPublicKey, u64),
     External(ExternalMessage),
     CLI(CLIMessage),
-    Ping
+    Ping,
 }
 
 /// Messages received on the network
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExternalMessage {
     Bootstrap(Blockchain), // if we need a blockchain to start off on we take this one
-    BootstrapReqFrom(SocketAddr), // someone needs a blockchain 
+    BootstrapReqFrom(SocketAddr), // someone needs a blockchain
     BroadcastTransaction(Transaction),
     BroadcastBlock(Block), // a won block
 }
@@ -138,7 +181,7 @@ impl From<ExternalMessage> for ClientMessage {
     }
 }
 
-// messages from the CLI to the client 
+// messages from the CLI to the client
 #[derive(Clone, Debug)]
 pub enum CLIMessage {
     PostTransaction(Transaction),
@@ -159,6 +202,10 @@ pub enum Error {
     CLIError,
     #[error("Invalid pem")]
     InvalidPem,
+    #[error("pkcs1v15 error")]
+    Pkcs1v15Error,
+    #[error("pss error")]
+    PssError,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -225,7 +272,7 @@ mod tests {
         let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50);
 
         let mut ledger = Ledger::new();
-        ledger.reward_winner(from.as_ref(), 102);
+        ledger.reward_winner(&from, 102);
         assert!(ledger.process_transaction(&transaction));
 
         assert_eq!(ledger.get_balance(&from_rsa), 51);
@@ -556,26 +603,36 @@ mod tests {
         let (_, vk3) = generate_keypair();
         let (_, vk4) = generate_keypair();
 
-        let mut blockchain = Blockchain::start(vec![
-            vk1.clone().into(),
-            vk2.clone().into(),
-            vk3.clone().into(),
-            vk4.clone().into(),
-        ], &sk1);
+        let mut blockchain = Blockchain::start(
+            vec![
+                vk1.clone().into(),
+                vk2.clone().into(),
+                vk3.clone().into(),
+                vk4.clone().into(),
+            ],
+            &sk1,
+        );
 
-        let mut block = Block::new(1, blockchain.best_path_head.0, 1, vk1.clone(), Vec::new(), &sk1);
+        let mut block = Block::new(
+            1,
+            blockchain.best_path_head.0,
+            1,
+            vk1.clone(),
+            Vec::new(),
+            &sk1,
+        );
         loop {
-            if blockchain.stake(&block, vk1.as_ref()) {
+            if blockchain.stake(&block, &vk1) {
                 break;
-            } else { 
+            } else {
                 block.increment_timeslot();
             }
         }
 
         assert!(blockchain.add_block(block));
-    
+
         assert!(blockchain.verify_chain());
-        blockchain.ledger.reward_winner(vk1.as_ref(), 50);
+        blockchain.ledger.reward_winner(&vk1, 50);
         assert!(!blockchain.verify_chain());
     }
 
@@ -589,20 +646,30 @@ mod tests {
         let (_, vk3) = generate_keypair();
         let (_, vk4) = generate_keypair();
 
-        let mut blockchain = Blockchain::start(vec![
-            vk1.clone().into(),
-            vk2.clone().into(),
-            vk3.clone().into(),
-            vk4.clone().into(),
-        ], &sk1);
+        let mut blockchain = Blockchain::start(
+            vec![
+                vk1.clone().into(),
+                vk2.clone().into(),
+                vk3.clone().into(),
+                vk4.clone().into(),
+            ],
+            &sk1,
+        );
 
         let illegal_transaction = Transaction::new(vk2, vk1.clone(), &sk1, 3);
-        let mut block = Block::new(0, blockchain.best_path_head.0, 1, vk1.clone(), vec![illegal_transaction], &sk1);
+        let mut block = Block::new(
+            0,
+            blockchain.best_path_head.0,
+            1,
+            vk1.clone(),
+            vec![illegal_transaction],
+            &sk1,
+        );
         loop {
             let draw = blockchain.get_draw(&sk1);
-            if blockchain.stake(draw, vk1.as_ref()) {
+            if blockchain.stake(draw, &vk1) {
                 block.increment_timeslot();
-            } else { 
+            } else {
                 break;
             }
         }

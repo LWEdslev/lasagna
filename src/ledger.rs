@@ -43,8 +43,8 @@ impl Ledger {
         if transaction.amount < TRANSACTION_FEE {
             return false;
         };
-        let from: &RsaPublicKey = transaction.from.as_ref();
-        let to: &RsaPublicKey = transaction.to.as_ref();
+        let from: &RsaPublicKey = &transaction.from;
+        let to: &RsaPublicKey = &transaction.to;
         let amount = transaction.amount;
         self.add_acount_if_absent(from);
         self.add_acount_if_absent(to);
@@ -70,8 +70,8 @@ impl Ledger {
     /// Reverse the transaction
     /// panics if the transaction was not performed
     pub fn rollback_transaction(&mut self, transaction: &Transaction) {
-        let from: &RsaPublicKey = transaction.from.as_ref();
-        let to: &RsaPublicKey = transaction.to.as_ref();
+        let from: &RsaPublicKey = &transaction.from;
+        let to: &RsaPublicKey = &transaction.to;
         let amount = transaction.amount;
 
         assert!(self.previous_transactions.remove(&transaction.hash));
@@ -100,7 +100,7 @@ impl Ledger {
         if transaction.amount < TRANSACTION_FEE {
             return false;
         };
-        let from: &RsaPublicKey = transaction.from.as_ref();
+        let from: &RsaPublicKey = &transaction.from;
         let amount = transaction.amount;
 
         let Some(from_balance) = self.map.get(from) else {

@@ -16,15 +16,15 @@ use rsa::sha2::Digest;
 pub struct Blockchain {
     pub(super) blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block
     pub(super) best_path_head: ([u8; 32], u64), // the hash and depth of the head of the current best path
-    pub(super) ledger: Ledger,                  // this should follow the best_path_heads state
+    pub(super) ledger: Ledger, // this should follow the best_path_heads state
     pub(super) root_accounts: Vec<RsaPublicKey>,
     pub(super) orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks
-    pub(super) transaction_buffer: Vec<Transaction>, // TODO(before pre-alpha) this should be a HashMap<Timeslot, Vec<Transaction>>
+    pub(super) transaction_buffer: HashSet<Transaction>, 
     start_time: u128,
 }
 
 impl Blockchain {
-    pub fn start(root_accounts: Vec<RsaPublicKey>, any_sk: &SigningKey<Sha256>) -> Self {
+    pub fn start(root_accounts: Vec<RsaPublicKey>, any_sk: &RsaPrivateKey) -> Self {
         let mut hasher = Sha256::new();
         for ra in root_accounts.iter() {
             hasher.update(ra.to_pkcs1_der().unwrap().as_bytes());
@@ -50,13 +50,15 @@ impl Blockchain {
 
         let blocks = vec![map];
 
+        let buffer_ledger = ledger.clone();
+
         Self {
             blocks,
             best_path_head: (hash, 0),
             ledger,
             root_accounts,
             orphans: HashMap::new(),
-            transaction_buffer: Vec::new(),
+            transaction_buffer: HashSet::new(),
             start_time: crate::get_unix_timestamp(),
         }
     }
@@ -115,7 +117,9 @@ impl Blockchain {
             .insert(block.hash.clone(), block.clone());
 
         // remove all transactions from the buffer that are in the block
-        self.transaction_buffer.retain(|t| !block.transactions.contains(t));
+        for t in block.transactions.iter() {
+            self.transaction_buffer.remove(t);
+        }
 
         // we check if this is the new best path
         let (old_best_path, old_depth) = self.best_path_head;
@@ -131,7 +135,7 @@ impl Blockchain {
             } else {
                 self.proccess_transactions(&block.transactions);
                 self.ledger
-                    .reward_winner(block.draw.signed_by.as_ref(), BLOCK_REWARD);
+                    .reward_winner(&block.draw.signed_by, BLOCK_REWARD);
             }
         } else if depth == self.best_path_head.1 as usize {
             //println!("equal depth");
@@ -177,42 +181,11 @@ impl Blockchain {
         timeslot as _
     }
 
-    pub fn create_empty_mining_block(
-        &self,
-        account: RsaPublicKey,
-        account_sk: &RsaPrivateKey,
-    ) -> Block {
-        Block::new(
-            self.calculate_timeslot(),
-            self.best_path_head.0,
-            self.best_path_head.1 + 1,
-            account.into(),
-            Vec::new(),
-            &account_sk.clone().into(),
-        )
-    }
-
-    pub fn create_mining_block(
-        &self,
-        account: RsaPublicKey,
-        account_sk: &RsaPrivateKey,
-    ) -> Block {
-        Block::new(
-            self.calculate_timeslot(),
-            self.best_path_head.0,
-            self.best_path_head.1 + 1,
-            account.into(),
-            self.transaction_buffer.clone(),
-            &account_sk.clone().into(),
-        )
-    }
-
     pub fn add_transaction(&mut self, transaction: Transaction) -> bool {
         if transaction.verify_signature()
             && self.ledger.is_transaction_possible(&transaction)
         {
-            self.transaction_buffer.push(transaction);
-            println!("transaction added to buffer");
+            self.transaction_buffer.insert(transaction);
             true
         } else {
             println!("invalid transaction");
@@ -235,10 +208,10 @@ impl Blockchain {
             track_stack.push((to_ptr.hash, to_ptr.depth));
             if to_ptr.depth == 1 && from_ptr.depth == 1 {
                 if to_ptr.prev_hash == from_ptr.prev_hash {
-                    self.ledger.rollback_reward(to_ptr.draw.signed_by.as_ref());
+                    self.ledger.rollback_reward(&to_ptr.draw.signed_by);
                     for t in from_ptr.transactions.iter() {
                         self.ledger.rollback_transaction(t);
-                        self.transaction_buffer.push(t.clone()); // we have to readd the transactions to the buffer
+                        self.transaction_buffer.insert(t.clone()); // we have to readd the transactions to the buffer
                     }
                     break; // we have reached the genesis block
                 }
@@ -250,7 +223,7 @@ impl Blockchain {
             if old_to_ptr_depth == from_ptr.depth {
                 // to_depth is always >= from_depth so we have to ensure that to goes back first
                 // we roll back the transactions on the from path
-                self.ledger.rollback_reward(to_ptr.draw.signed_by.as_ref());
+                self.ledger.rollback_reward(&to_ptr.draw.signed_by);
                 for t in from_ptr.transactions.iter() {
                     self.ledger.rollback_transaction(t);
                 }
@@ -266,10 +239,10 @@ impl Blockchain {
         while let Some((hash, depth)) = track_stack.pop() {
             let block = get_block(&hash, depth);
             for t in block.transactions.iter() {
-                self.ledger.process_transaction(t); // an optimization is not verifying the transaction here
+                self.ledger.process_transaction(t);
             }
             self.ledger
-                .reward_winner(block.draw.signed_by.as_ref(), BLOCK_REWARD);
+                .reward_winner(&block.draw.signed_by, BLOCK_REWARD);
         }
     }
 
@@ -280,7 +253,7 @@ impl Blockchain {
 
     fn proccess_transactions(&mut self, transactions: &Vec<Transaction>) {
         for t in transactions.iter() {
-            self.ledger.process_transaction(t); // an optimization is not verifying the transaction here
+            self.ledger.process_transaction(t);
         }
     }
 
@@ -363,7 +336,7 @@ impl Blockchain {
                 return false;
             };
 
-            let winner = block.draw.signed_by.as_ref();
+            let winner = &block.draw.signed_by;
             if !is_winner(&track_ledger, block.draw.clone(), winner) {
                 println!("false winner");
                 return false;
@@ -427,17 +400,17 @@ impl Blockchain {
         self.best_path_head.0
     }
 
-    pub fn get_draw(&self, sk: &SigningKey<Sha256>) -> Draw {
-        Draw::new(self.calculate_timeslot(), sk.verifying_key(), sk, self.get_best_hash())
+    pub fn get_draw(&self, sk: &RsaPrivateKey) -> Draw {
+        Draw::new(self.calculate_timeslot(), sk.to_public_key(), sk, self.get_best_hash())
     }
     
-    pub(crate) fn get_new_block(&self, draw: Draw, sk: &SigningKey<Sha256>) -> Block {
+    pub(crate) fn get_new_block(&self, draw: Draw, sk: &RsaPrivateKey) -> Block {
         Block::new(
             draw.timeslot,
             draw.prev_hash,
             self.best_path_head.1 + 1,
             draw.signed_by.clone(),
-            self.transaction_buffer.clone(),
+            self.transaction_buffer.clone().into_iter().collect(),
             &sk,
         )
     }

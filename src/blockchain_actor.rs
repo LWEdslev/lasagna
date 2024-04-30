@@ -15,7 +15,6 @@ struct BlockchainActor {
     blockchain: Blockchain,
     account: RsaPublicKey,
     account_sk: RsaPrivateKey,
-    signing_key: SigningKey<Sha256>,
 }
 
 impl BlockchainActor {
@@ -25,13 +24,11 @@ impl BlockchainActor {
         account_sk: RsaPrivateKey,
         sending_channel: tokio::sync::mpsc::Sender<ClientMessage>,
     ) -> Self {
-        let signing_key = account_sk.clone().into();
         Self {
             sending_channel,
             blockchain,
             account,
             account_sk,
-            signing_key,
         }
     }
 
@@ -52,9 +49,9 @@ impl BlockchainActor {
                     .unwrap();
             }
             Stake => {
-                let draw = self.blockchain.get_draw(&self.signing_key);
+                let draw = self.blockchain.get_draw(&self.account_sk);
                 if self.blockchain.stake(draw.clone(), &self.account) {
-                    let block = self.blockchain.get_new_block(draw.clone(), &self.signing_key);
+                    let block = self.blockchain.get_new_block(draw.clone(), &self.account_sk);
                     if self.blockchain.add_block(block.clone()) {
                         self.sending_channel
                             .send(ClientMessage::Won(block.clone()))

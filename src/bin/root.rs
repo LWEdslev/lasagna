@@ -2,17 +2,20 @@ use std::{net::SocketAddr, time::Duration};
 
 use clap::Parser;
 use lasagna::{client::ClientActor, MainArgs, RootArgs, ARGS};
-use rsa::{pkcs8::DecodePublicKey, RsaPublicKey};
+use rand::thread_rng;
+use rsa::{pkcs8::DecodePublicKey, sha2::{Digest, Sha256}, Pkcs1v15Sign, Pss, RsaPrivateKey, RsaPublicKey};
 
 #[tokio::main]
 async fn main() {
+
+    
+
     let args: RootArgs = match ARGS.clone() {
         MainArgs::Root(a) => a,
         MainArgs::Regular(_) => panic!("Use root arguments"),
     };
 
     // read the root accounts files in the path_to_root_accounts
-
     let dir = std::fs::read_dir(&args.root).unwrap();
     let mut root_accounts = Vec::new();
     for entry in dir {
