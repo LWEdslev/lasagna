@@ -6,7 +6,7 @@ use rsa::{pss::SigningKey, sha2::Sha256, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::draw::Draw;
-use crate::Timeslot;
+use crate::{Timeslot, SLOT_LENGTH};
 use crate::{
     block::Block, is_winner, ledger::Ledger, transaction::Transaction, BLOCK_REWARD, ROOT_AMOUNT,
 };
@@ -24,6 +24,10 @@ pub struct Blockchain {
 }
 
 impl Blockchain {
+    pub fn get_start_time(&self) -> u128 {
+        self.start_time
+    }
+
     pub fn start(root_accounts: Vec<RsaPublicKey>, any_sk: &RsaPrivateKey) -> Self {
         let mut hasher = Sha256::new();
         for ra in root_accounts.iter() {
@@ -177,7 +181,7 @@ impl Blockchain {
 
         let now = crate::get_unix_timestamp();
         let start = self.start_time;
-        let timeslot = (now - start) / 10;
+        let timeslot = (now - start) / SLOT_LENGTH;
         timeslot as _
     }
 

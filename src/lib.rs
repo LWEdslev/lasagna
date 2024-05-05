@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::stdin;
 use transaction::Transaction;
-
+pub mod clock_watch;
 pub mod block;
 pub mod blockchain;
 pub mod blockchain_actor;
@@ -35,7 +35,7 @@ pub mod transaction;
 pub const TRANSACTION_FEE: u64 = 1;
 pub const BLOCK_REWARD: u64 = 50;
 pub const ROOT_AMOUNT: u64 = 300;
-pub const SLOT_LENGTH: u128 = 100; // TODO Increase to 10_000 aka 10 sec
+pub const SLOT_LENGTH: u128 = 10_000; // TODO Increase to 10_000 aka 10 sec
 
 pub(crate) type Timeslot = u64;
 
@@ -212,6 +212,16 @@ pub enum Error {
     Pkcs1v15Error,
     #[error("pss error")]
     PssError,
+}
+
+pub(crate) fn calculate_timeslot(start_time: u128) -> Timeslot {
+    #[cfg(feature = "max_timeslot")]
+    return u64::MAX;
+
+    let now = crate::get_unix_timestamp();
+    let start = start_time;
+    let timeslot = (now - start) / SLOT_LENGTH;
+    timeslot as _
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -7,7 +7,7 @@ use tokio::sync::{
 };
 
 use crate::{
-    block::Block, blockchain::Blockchain, transaction::Transaction, ClientMessage, Timeslot,
+    block::Block, blockchain::Blockchain, clock_watch::ClockWatch, transaction::Transaction, ClientMessage, Timeslot
 };
 
 struct BlockchainActor {
@@ -51,7 +51,9 @@ impl BlockchainActor {
             Stake => {
                 let draw = self.blockchain.get_draw(&self.account_sk);
                 if self.blockchain.stake(draw.clone(), &self.account) {
-                    let block = self.blockchain.get_new_block(draw.clone(), &self.account_sk);
+                    let block = self
+                        .blockchain
+                        .get_new_block(draw.clone(), &self.account_sk);
                     if self.blockchain.add_block(block.clone()) {
                         self.sending_channel
                             .send(ClientMessage::Won(block.clone()))
@@ -65,6 +67,9 @@ impl BlockchainActor {
             BlockchainCopy(callback) => {
                 callback.send(self.blockchain.clone()).unwrap();
             }
+            GetStartTime(callback) => {
+                callback.send(self.blockchain.get_start_time()).unwrap();
+            }
         }
     }
 }
@@ -75,6 +80,7 @@ enum BlockchainActorMessage {
     CheckBalance(RsaPublicKey),
     Stake,
     BlockchainCopy(oneshot::Sender<Blockchain>),
+    GetStartTime(oneshot::Sender<u128>),
 }
 
 impl Debug for BlockchainActorMessage {
@@ -86,6 +92,7 @@ impl Debug for BlockchainActorMessage {
             CheckBalance(_) => write!(f, "CheckBalance"),
             Stake => write!(f, "Stake"),
             BlockchainCopy(_) => write!(f, "BlockchainCopy"),
+            GetStartTime(_) => write!(f, "GetStartTime"),
         }
     }
 }
@@ -96,13 +103,15 @@ pub struct BlockchainActorHandle {
 }
 
 impl BlockchainActorHandle {
-    pub fn new(
+    pub async fn new(
         blockchain: Blockchain,
         account: RsaPublicKey,
         account_sk: RsaPrivateKey,
         client_tx: Sender<ClientMessage>,
     ) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
+        let start_time = blockchain.get_start_time();
+
         let mut actor = BlockchainActor::run(blockchain, account, account_sk, client_tx.clone());
         tokio::spawn(async move {
             while let Some(msg) = receiver.recv().await {
@@ -110,12 +119,13 @@ impl BlockchainActorHandle {
             }
         });
 
-        // start a task that sends stake messages every second, to keep checking
+        // start a task that sends stake messages at beginning of timeslot, to keep checking if we won
         {
             let sender = sender.clone();
             tokio::spawn(async move {
+                let mut clock = ClockWatch::start(start_time);
                 loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    clock.wait_for_update().await;
                     sender.send(BlockchainActorMessage::Stake).await.unwrap();
                 }
             });
@@ -156,6 +166,15 @@ impl BlockchainActorHandle {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(BlockchainActorMessage::BlockchainCopy(tx))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn get_start_time(&self) -> u128 {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(BlockchainActorMessage::GetStartTime(tx))
             .await
             .unwrap();
         rx.await.unwrap()

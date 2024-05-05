@@ -38,7 +38,7 @@ impl ClientActor {
         let blockchain = Blockchain::start(root_accounts, &sk.clone().into());
 
         let blockchain_handle =
-            BlockchainActorHandle::new(blockchain, sk.to_public_key(), sk.clone(), tx.clone());
+            BlockchainActorHandle::new(blockchain, sk.to_public_key(), sk.clone(), tx.clone()).await;
 
         crate::cli::run_cli(tx.clone());
         ClientActor::read_messages(
@@ -113,7 +113,7 @@ impl ClientActor {
                         account_sk.to_public_key(),
                         account_sk,
                         self.tx.clone(),
-                    );
+                    ).await;
                     self.blockchain = Some(blockchain);
                 }
             }
