@@ -15,7 +15,7 @@ max_timeslot = []
 hex = "0.4.3"
 rand = "0.8.5"
 serde = { version = "1.0.197", features = ["derive"] }
-tokio = { version = "1.36.0", features = ["sync", "io-util", "rt", "macros", "rt-multi-thread", "time", "net", "io-std"] }
+tokio = { version = "1.36.0", features = ["sync", "io-util", "rt", "macros", "rt-multi-thread", "time", "net", "io-std", "signal"] }
 rsa = { git = "https://github.com/LWEdslev/RSA", branch = "master", features = ["serde", "sha2"]}
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 num-bigint = {version = "0.4.4", features = ["serde"] }

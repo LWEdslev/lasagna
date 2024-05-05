@@ -24,7 +24,5 @@ async fn main() {
 
     ClientActor::run_root(*ADDR, root_accounts).await;
 
-    loop {
-        tokio::time::sleep(Duration::from_secs(100)).await;
-    }
+    tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
 }
