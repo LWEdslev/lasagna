@@ -47,11 +47,6 @@ impl PeersetInner {
         self.dynamic_set.remove(peer);
     }
 
-    pub fn replace(&mut self, to_add: SocketAddr, to_remove: &SocketAddr) {
-        self.remove(to_remove);
-        self.insert(to_add);
-    }
-
     pub fn update(&mut self) {
         if self.static_set.len() < STATIC_SET_SIZE && !self.dynamic_set.is_empty() {
             let from_dyn = *self.dynamic_set.iter().next().unwrap();
@@ -90,10 +85,6 @@ impl Peerset {
         }
     }
 
-    pub async fn len(&self) -> usize {
-        self.inner.read().await.len()
-    }
-
     pub async fn add_peer(&self, peer: SocketAddr) {
         let mut inner = self.inner.write().await;
         if inner.len() < MAX_PEERS {
@@ -122,10 +113,10 @@ mod tests {
     #[tokio::test]
     async fn add_len() {
         let set = Peerset::empty();
-        assert_eq!(set.len().await, 0);
+        assert_eq!(set.inner.read().await.len(), 0);
         let p1 = "127.0.0.1:8080".parse().unwrap();
         set.add_peer(p1).await;
-        assert_eq!(set.len().await, 1);
+        assert_eq!(set.inner.read().await.len(), 1);
     }
 
     #[tokio::test]
@@ -135,7 +126,7 @@ mod tests {
         let p2 = "127.0.0.1:8081".parse().unwrap();
         set.add_peer(p1).await;
         set.replace(p1, p2).await;
-        assert_eq!(set.len().await, 1);
+        assert_eq!(set.inner.read().await.len(), 1);
         assert!(set.get_copy().await.contains(&p2));
     }
 }

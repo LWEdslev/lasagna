@@ -1,12 +1,10 @@
-use std::{borrow::Borrow, time::Duration};
+use std::time::Duration;
 
 use tokio::sync::watch;
 
 use crate::{calculate_timeslot, get_unix_timestamp, SLOT_LENGTH};
 
 /// A tokio sync watch that sends a timeslot when a new timeslot is reached
-/// Then the blockchain actor can stake when it sees the update
-
 #[derive(Clone)]
 pub struct ClockWatch {
     receiver: watch::Receiver<u64>,

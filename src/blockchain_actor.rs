@@ -1,13 +1,13 @@
 use std::fmt::Debug;
 
-use rsa::{pss::SigningKey, sha2::Sha256, RsaPrivateKey, RsaPublicKey};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use tokio::sync::{
-    mpsc::{Receiver, Sender},
+    mpsc::Sender,
     oneshot,
 };
 
 use crate::{
-    block::Block, blockchain::Blockchain, clock_watch::ClockWatch, transaction::Transaction, ClientMessage, Timeslot
+    block::Block, blockchain::Blockchain, clock_watch::ClockWatch, transaction::Transaction, ClientMessage
 };
 
 struct BlockchainActor {

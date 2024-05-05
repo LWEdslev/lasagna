@@ -11,6 +11,12 @@ pub struct Ledger {
     pub(super) previous_transactions: HashSet<[u8; 32]>,
 }
 
+impl Default for Ledger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Ledger {
     pub fn new() -> Self {
         Self {
@@ -20,7 +26,7 @@ impl Ledger {
     }
 
     pub fn add_acount_if_absent(&mut self, account: &RsaPublicKey) {
-        if !self.map.contains_key(&account) {
+        if !self.map.contains_key(account) {
             self.map.insert(account.clone(), 0);
         }
     }

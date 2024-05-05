@@ -2,15 +2,10 @@ use std::collections::HashSet;
 
 use crate::PssSignature;
 use crate::{draw::Draw, transaction::Transaction, Timeslot};
-use rand::thread_rng;
-use rsa::signature::SignatureEncoding;
-use rsa::signature::Verifier;
 use rsa::RsaPrivateKey;
 use rsa::{
     pkcs1::EncodeRsaPublicKey,
-    pss::{Signature, SigningKey},
     sha2::{Digest, Sha256},
-    signature::RandomizedSigner,
     RsaPublicKey,
 };
 use serde::{Deserialize, Serialize};
@@ -35,13 +30,12 @@ impl Block {
         transactions: Vec<Transaction>,
         sk: &RsaPrivateKey,
     ) -> Self {
-        let mut rng = thread_rng();
-        let draw = Draw::new(timeslot, winner.clone(), &sk, prev_hash);
+        let draw = Draw::new(timeslot, winner.clone(), sk, prev_hash);
         let fields_string =
             Block::combine_fields_to_string(&timeslot, &prev_hash, depth, &draw, &transactions);
         let mut hasher = Sha256::new();
         hasher.update(fields_string.as_bytes());
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
         let signature = PssSignature::sign(sk, &hash).unwrap();
         Self {
             timeslot,
@@ -64,7 +58,7 @@ impl Block {
         );
         let mut hasher = Sha256::new();
         hasher.update(fields_string.as_bytes());
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
         hash == self.hash && self.signature.verify(&self.draw.signed_by, &hash).is_ok()
     }
 
@@ -122,44 +116,6 @@ impl Block {
         self.timeslot += 1;
     }
 
-    pub(super) fn set_draw(&mut self, sk: &RsaPrivateKey) {
-        self.draw = Draw::new(
-            self.timeslot,
-            self.draw.signed_by.clone(),
-            sk,
-            self.prev_hash,
-        );
-    }
-
-    pub(super) fn sign_and_rehash(&mut self, sk: &RsaPrivateKey) {
-        let fields_string = Block::combine_fields_to_string(
-            &self.timeslot,
-            &self.prev_hash,
-            self.depth,
-            &self.draw,
-            &self.transactions,
-        );
-        let mut hasher = Sha256::new();
-        hasher.update(fields_string.as_bytes());
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
-        self.hash = hash;
-        self.signature = PssSignature::sign(sk, &hash).unwrap(); 
-    }
-
-    pub(super) fn rehash(&mut self) {
-        let fields_string = Block::combine_fields_to_string(
-            &self.timeslot,
-            &self.prev_hash,
-            self.depth,
-            &self.draw,
-            &self.transactions,
-        );
-        let mut hasher = Sha256::new();
-        hasher.update(fields_string.as_bytes());
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
-        self.hash = hash;
-    }
-
     // Tiebreak
     pub(super) fn is_better_than(&self, other: &Block) -> bool {
         // Tiebreak 1, earliest timeslot
@@ -176,8 +132,8 @@ impl Block {
         }
 
         // Tiebreak 3, lexicographically greatest hash
-        let self_hash = hex::encode(self.hash.clone());
-        let other_hash = hex::encode(other.hash.clone());
+        let self_hash = hex::encode(self.hash);
+        let other_hash = hex::encode(other.hash);
 
         if let std::cmp::Ordering::Greater = self_hash.cmp(&other_hash) {
             return true;

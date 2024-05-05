@@ -17,7 +17,7 @@ use crate::{
 };
 use rand::Rng;
 use tokio::{
-    net::{unix::pipe::Receiver, TcpStream},
+    net::TcpStream,
     sync::mpsc,
 };
 
@@ -217,7 +217,6 @@ where
             writer.send_message(message.clone()).await?;
             Ok(())
         } else {
-            panic!();
             Err(PippiError::NotFound)
         }
     }

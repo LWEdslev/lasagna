@@ -1,22 +1,18 @@
 // we create a client, this is where we combine the network with the core and the cli and handle the messages passed between these actors
 
-use std::{
-    fs::{self, ReadDir},
-    io::Write,
-    net::SocketAddr,
-};
+use std::net::SocketAddr;
 
 use rsa::{
-    pkcs1::EncodeRsaPublicKey, pkcs8::der::zeroize::Zeroizing, rand_core::block, RsaPrivateKey,
+    pkcs8::der::zeroize::Zeroizing, RsaPrivateKey,
     RsaPublicKey,
 };
 use tokio::sync::mpsc;
 
 use crate::{
-    blockchain::{self, Blockchain},
+    blockchain::Blockchain,
     blockchain_actor::BlockchainActorHandle,
     network_actor::NetworkHandle,
-    CLIMessage, ClientMessage, ExternalMessage, WALLETS,
+    CLIMessage, ClientMessage, ExternalMessage,
 };
 
 pub struct ClientActor {
@@ -35,7 +31,7 @@ impl ClientActor {
         let (tx, rx) = mpsc::channel(100);
         let network = NetworkHandle::new(addr, addr, tx.clone());
 
-        let blockchain = Blockchain::start(root_accounts, &sk.clone().into());
+        let blockchain = Blockchain::start(root_accounts, &sk.clone());
 
         let blockchain_handle =
             BlockchainActorHandle::new(blockchain, sk.to_public_key(), sk.clone(), tx.clone()).await;
@@ -92,7 +88,7 @@ impl ClientActor {
                 //println!("We won a block");
                 self.network.broadcast_block(block).await.unwrap();
             }
-            ClientMessage::BalanceOf(wallet, balance) => {
+            ClientMessage::BalanceOf(_wallet, balance) => {
                 println!("Wallet has {} las", balance);
             }
             ClientMessage::External(ext_msg) => self.handle_external_message(ext_msg).await,

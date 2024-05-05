@@ -1,9 +1,5 @@
-use std::{net::SocketAddr, time::Duration};
-
-use clap::Parser;
 use lasagna::{client::ClientActor, ADDR, ROOTS, WALLETS};
-use rand::thread_rng;
-use rsa::{pkcs8::DecodePublicKey, sha2::{Digest, Sha256}, Pkcs1v15Sign, Pss, RsaPrivateKey, RsaPublicKey};
+use rsa::{pkcs8::DecodePublicKey, RsaPublicKey};
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +8,7 @@ async fn main() {
     let _ = *ROOTS;
 
     // read the root accounts files in the path_to_root_accounts
-    let dir = std::fs::read_dir(&ROOTS.clone()).unwrap();
+    let dir = std::fs::read_dir(ROOTS.clone()).unwrap();
     let mut root_accounts = Vec::new();
     for entry in dir {
         let entry = entry.unwrap();

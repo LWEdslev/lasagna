@@ -3,7 +3,7 @@ use std::{collections::HashSet, net::SocketAddr};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{ClientMessage, ExternalMessage};
+use crate::ExternalMessage;
 
 pub(crate) mod connectionmap;
 pub(crate) mod flooding_set_actor;

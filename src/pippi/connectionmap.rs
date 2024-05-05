@@ -43,10 +43,6 @@ impl ConnectionMap {
         self.inner.read().await.len()
     }
 
-    pub async fn contains(&self, addr: &SocketAddr) -> bool {
-        self.inner.read().await.contains_key(addr)
-    }
-
     pub async fn keys(&self) -> Vec<SocketAddr> {
         self.inner.read().await.keys().copied().collect()
     }

@@ -1,15 +1,14 @@
-use std::{fs::ReadDir, path::{Path, PathBuf}, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use arrayref::array_ref;
-use bip39::{Language, Mnemonic, MnemonicType, Seed};
+use bip39::{Language, Mnemonic, Seed};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rsa::{
-    pkcs1::EncodeRsaPublicKey,
     pkcs8::{der::zeroize::Zeroizing, DecodePublicKey},
     RsaPrivateKey, RsaPublicKey,
 };
-use tokio::io::AsyncBufRead;
+
 use tokio::io::AsyncBufReadExt;
 use tokio::{io::BufReader, sync::mpsc::Sender};
 
@@ -36,16 +35,16 @@ async fn read_input() -> Result<CLIMessage> {
 
     match first_token.as_str() {
         "send" => {
-            return read_transaction(&mut tokens)
+            read_transaction(&mut tokens)
                 .await
-                .map(|t| CLIMessage::PostTransaction(t))
+                .map(CLIMessage::PostTransaction)
         }
         "balance" => {
             let public_key =
                 read_public_key_pem(&tokens.next().ok_or(Error::CLIError)?, WALLETS.clone())?;
-            return Ok(CLIMessage::CheckBalance(public_key));
+            Ok(CLIMessage::CheckBalance(public_key))
         }
-        _ => return Err(Error::CLIError),
+        _ => Err(Error::CLIError),
     }
 }
 
@@ -58,13 +57,13 @@ async fn read_transaction(tokens: &mut impl Iterator<Item = String>) -> Result<C
 
     let receiver = read_public_key_pem(&tokens.next().ok_or(Error::CLIError)?, WALLETS.clone())?;
     Ok(CliPreTransaction {
-        to: receiver.into(),
+        to: receiver,
         amount,
     })
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct CliPreTransaction {
+pub struct CliPreTransaction {
     to: RsaPublicKey,
     amount: u64,
 }
@@ -82,7 +81,7 @@ fn read_public_key_pem(name: &str, wallets_dir: PathBuf) -> Result<RsaPublicKey>
 }
 
 pub fn key_from_seedphrase(seedphrase: &Zeroizing<String>) -> Result<RsaPrivateKey> {
-    Mnemonic::validate(&seedphrase, Language::English).map_err(|_| Error::CLIError)?;
+    Mnemonic::validate(seedphrase, Language::English).map_err(|_| Error::CLIError)?;
     let mnemonic = Mnemonic::from_phrase(seedphrase.as_str(), Language::English).unwrap();
     let seed = Seed::new(&mnemonic, "");
     let seed_array = *array_ref!(seed.as_bytes(), 0, 32);

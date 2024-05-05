@@ -17,18 +17,16 @@ impl HeartbeatActor {
 
     fn take_dead(&mut self) -> Vec<SocketAddr> {
         let curr_time = crate::pippi::get_unix_time();
-        let dead = self
+        
+        self
             .map
             .clone()
             .into_iter()
-            .filter_map(|(peer, ts)| {
-                (ts + DEAD < curr_time).then(|| {
+            .filter(|&(_peer, ts)| (ts + DEAD < curr_time)).map(|(peer, _ts)| {
                     self.map.remove_entry(&peer);
                     peer
                 })
-            })
-            .collect();
-        dead
+            .collect()
     }
 
     async fn handle_message(&mut self, msg: HeartbeatActorMessage) {

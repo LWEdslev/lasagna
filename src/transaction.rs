@@ -2,15 +2,12 @@ use std::hash::Hash;
 
 use rand::thread_rng;
 use rsa::pkcs1::EncodeRsaPublicKey;
-use rsa::signature::RandomizedSigner;
-use rsa::signature::Verifier;
+
 use rsa::RsaPrivateKey;
 use rsa::RsaPublicKey;
-use rsa::{
-    pss::{Signature, SigningKey},
-    sha2::{Digest, Sha256},
-};
+use rsa::sha2::Sha256;
 use serde::{Deserialize, Serialize};
+use rsa::sha2::Digest;
 
 use crate::PssSignature;
 
@@ -31,15 +28,15 @@ impl Transaction {
         amount: u64,
     ) -> Self {
         let fields_string = Self::combine_fields_to_string(&from, &to, amount);
-        let mut rng = thread_rng();
+        let _rng = thread_rng();
         let mut hasher = Sha256::new();
         hasher.update(fields_string);
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
         let signature = PssSignature::sign(sk, &hash).unwrap();
         let mut hasher = Sha256::new();
         hasher.update(signature.to_bytes()); 
         // we hash the signature as well, since we sign with RNG we have a unique hash 
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
 
         Self {
             from,
@@ -64,12 +61,12 @@ impl Transaction {
             Self::combine_fields_to_string(&self.from, &self.to, self.amount);
         let mut hasher = Sha256::new();
         hasher.update(fields_string);
-        let fields_hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let fields_hash: [u8; 32] = hasher.finalize().into();
 
         let mut hasher = Sha256::new();
         hasher.update(self.signature.to_bytes()); 
         // we hash the signature as well, since we sign with RNG we have a unique hash 
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
 
         hash == self.hash && self.signature.verify(&self.from, &fields_hash).is_ok()
     }

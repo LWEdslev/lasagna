@@ -23,15 +23,15 @@ impl Draw {
         let mut hasher = Sha256::new();
         hasher.update(data.as_bytes());
         hasher.update(prev_hash);
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
         let signature = Pkcs1v15Signature::sign(sk, &hash).unwrap();
 
         let mut hasher = Sha256::new();
         hasher.update(signature.to_bytes());
-        let signature_hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let signature_hash: [u8; 32] = hasher.finalize().into();
         let value = BigUint::from_bytes_be(&signature_hash);
 
-        let rsa_vk: RsaPublicKey = vk.clone().into();
+        let _rsa_vk: RsaPublicKey = vk.clone();
 
         Self {
             value,
@@ -49,7 +49,7 @@ impl Draw {
         let mut hasher = Sha256::new();
         hasher.update(data.as_bytes());
         hasher.update(self.prev_hash);
-        let hash: [u8; 32] = hasher.finalize().try_into().unwrap();
+        let hash: [u8; 32] = hasher.finalize().into();
         self.signature.verify(vk, &hash).is_ok()
     }
 }

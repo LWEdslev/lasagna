@@ -4,21 +4,20 @@ use std::str::FromStr;
 
 use block::Block;
 use blockchain::Blockchain;
-use clap::Parser;
+
 use cli::CliPreTransaction;
 use draw::Draw;
 use ledger::Ledger;
 use num_bigint::BigUint;
 use rand::thread_rng;
-use rsa::signature::Keypair;
+
 use rsa::{
-    pss::{SigningKey, VerifyingKey},
     sha2::Sha256,
     RsaPrivateKey, RsaPublicKey,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::io::stdin;
+
 use transaction::Transaction;
 pub mod clock_watch;
 pub mod block;
@@ -96,7 +95,7 @@ fn is_winner(ledger: &Ledger, draw: Draw, wallet: &RsaPublicKey) -> bool {
     #[cfg(feature = "always_win")]
     return true;
 
-    let balance = BigUint::from(ledger.get_balance(&wallet));
+    let balance = BigUint::from(ledger.get_balance(wallet));
     let total_money = ledger.get_total_money_in_ledger();
 
     let max_hash = BigUint::from(2u64).pow(256);
@@ -128,7 +127,7 @@ pub struct Pkcs1v15Signature(Vec<u8>);
 impl Pkcs1v15Signature {
     pub fn sign(sk: &RsaPrivateKey, hashed_data: &[u8]) -> Result<Pkcs1v15Signature> {
         sk.sign(rsa::Pkcs1v15Sign::new::<Sha256>(), hashed_data)
-            .map(|s| Pkcs1v15Signature(s))
+            .map(Pkcs1v15Signature)
             .map_err(|_| Error::Pkcs1v15Error)
     }
 
@@ -148,7 +147,7 @@ pub struct PssSignature(Vec<u8>);
 impl PssSignature {
     pub fn sign(sk: &RsaPrivateKey, hashed_data: &[u8]) -> Result<PssSignature> {
         sk.sign_with_rng(&mut thread_rng(), rsa::Pss::new::<Sha256>(), hashed_data)
-            .map(|s| PssSignature(s))
+            .map(PssSignature)
             .map_err(|_| Error::PssError)
     }
 
@@ -253,7 +252,7 @@ mod tests {
         let from = vk.clone();
         let to = generate_keypair().1;
         let amount = 50;
-        let timeslot: Timeslot = 0;
+        let _timeslot: Timeslot = 0;
         let transaction = Transaction::new(from.clone(), to.clone(), &sk, amount);
 
         assert!(transaction.verify_signature());
@@ -282,9 +281,9 @@ mod tests {
         let (_, vk3) = generate_keypair();
 
         let from = vk.clone();
-        let from_rsa: RsaPublicKey = from.clone().into();
+        let from_rsa: RsaPublicKey = from.clone();
         let to = vk2.clone();
-        let to_rsa: RsaPublicKey = to.clone().into();
+        let to_rsa: RsaPublicKey = to.clone();
         let transaction = Transaction::new(from.clone(), to.clone(), &sk, 50);
 
         let mut ledger = Ledger::new();
@@ -310,7 +309,7 @@ mod tests {
 
         // ensure that the both have enough balance
         ledger.reward_winner(&from_rsa, 100);
-        ledger.reward_winner(&vk3.clone().into(), 100);
+        ledger.reward_winner(&vk3.clone(), 100);
 
         let transaction = Transaction::new(vk3.clone(), from.clone(), &sk, 50);
 
@@ -567,10 +566,10 @@ mod tests {
 
         let mut blockchain = Blockchain::start(
             vec![
-                vk1.clone().into(),
-                vk2.clone().into(),
-                vk3.clone().into(),
-                vk4.clone().into(),
+                vk1.clone(),
+                vk2.clone(),
+                vk3.clone(),
+                vk4.clone(),
             ],
             &sk1,
         );
@@ -594,10 +593,10 @@ mod tests {
 
         let mut blockchain = Blockchain::start(
             vec![
-                vk1.clone().into(),
-                vk2.clone().into(),
-                vk3.clone().into(),
-                vk4.clone().into(),
+                vk1.clone(),
+                vk2.clone(),
+                vk3.clone(),
+                vk4.clone(),
             ],
             &sk1,
         );
@@ -664,10 +663,10 @@ mod tests {
 
         let mut blockchain = Blockchain::start(
             vec![
-                vk1.clone().into(),
-                vk2.clone().into(),
-                vk3.clone().into(),
-                vk4.clone().into(),
+                vk1.clone(),
+                vk2.clone(),
+                vk3.clone(),
+                vk4.clone(),
             ],
             &sk1,
         );

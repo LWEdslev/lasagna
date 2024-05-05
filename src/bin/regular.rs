@@ -1,6 +1,3 @@
-use std::{net::SocketAddr, str::FromStr, time::Duration};
-
-use clap::Parser;
 use lasagna::{client::ClientActor, ADDR, SEED_ADDR, WALLETS};
 
 #[tokio::main]

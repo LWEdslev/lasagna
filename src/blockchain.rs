@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use rsa::signature::Keypair;
+
 use rsa::RsaPrivateKey;
-use rsa::{pss::SigningKey, sha2::Sha256, RsaPublicKey};
+use rsa::{sha2::Sha256, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::draw::Draw;
@@ -40,13 +40,13 @@ impl Blockchain {
             0,
             seed_hash,
             0,
-            root_accounts.get(0).unwrap().clone().into(),
+            root_accounts.first().unwrap().clone(),
             Vec::new(),
             any_sk,
         );
-        let hash = block.hash.clone();
+        let hash = block.hash;
         let mut map = HashMap::new();
-        map.insert(hash.clone(), block.clone());
+        map.insert(hash, block.clone());
         let mut ledger = Ledger::new();
         for root_account in root_accounts.iter() {
             ledger.reward_winner(root_account, ROOT_AMOUNT);
@@ -54,7 +54,7 @@ impl Blockchain {
 
         let blocks = vec![map];
 
-        let buffer_ledger = ledger.clone();
+        let _buffer_ledger = ledger.clone();
 
         Self {
             blocks,
@@ -113,12 +113,12 @@ impl Blockchain {
         }
 
         // clone the stuff we need later
-        let block_hash = block.hash.clone();
+        let block_hash = block.hash;
         // we add ourself
         self.blocks
             .get_mut(depth)
             .expect("unreachable")
-            .insert(block.hash.clone(), block.clone());
+            .insert(block.hash, block.clone());
 
         // remove all transactions from the buffer that are in the block
         for t in block.transactions.iter() {
@@ -208,15 +208,13 @@ impl Blockchain {
         let mut track_stack = Vec::new();
         while from_ptr != to_ptr {
             track_stack.push((to_ptr.hash, to_ptr.depth));
-            if to_ptr.depth == 1 && from_ptr.depth == 1 {
-                if to_ptr.prev_hash == from_ptr.prev_hash {
-                    self.ledger.rollback_reward(&to_ptr.draw.signed_by);
-                    for t in from_ptr.transactions.iter() {
-                        self.ledger.rollback_transaction(t);
-                        self.transaction_buffer.insert(t.clone()); // we have to readd the transactions to the buffer
-                    }
-                    break; // we have reached the genesis block
+            if to_ptr.depth == 1 && from_ptr.depth == 1 && to_ptr.prev_hash == from_ptr.prev_hash {
+                self.ledger.rollback_reward(&to_ptr.draw.signed_by);
+                for t in from_ptr.transactions.iter() {
+                    self.ledger.rollback_transaction(t);
+                    self.transaction_buffer.insert(t.clone()); // we have to readd the transactions to the buffer
                 }
+                break; // we have reached the genesis block
             }
             let (to_parent_hash, to_parent_depth) = (&to_ptr.prev_hash, to_ptr.depth - 1);
             let old_to_ptr_depth = to_ptr.depth;
@@ -339,7 +337,7 @@ impl Blockchain {
             if !block
                 .transactions
                 .iter()
-                .all(|t| track_ledger.process_transaction(&t))
+                .all(|t| track_ledger.process_transaction(t))
             {
                 return false;
             };
@@ -423,7 +421,7 @@ impl Blockchain {
             self.best_path_head.1 + 1,
             draw.signed_by.clone(),
             transactions_buffer,
-            &sk,
+            sk,
         )
     }
 }
