@@ -102,7 +102,7 @@ impl ClientActor {
             ExternalMessage::Bootstrap(blockchain) => {
                 println!("Blockchain bootstrapped");
                 if self.blockchain.is_none() {
-                    if !blockchain.verify_chain() { println!("Received invalid blockchain"); return };
+                    if let Err(e) = blockchain.verify_chain() { println!("Received invalid blockchain {e:?}"); return };
                     let account_sk = self.priv_key.clone();
                     let blockchain = BlockchainActorHandle::new(
                         blockchain,

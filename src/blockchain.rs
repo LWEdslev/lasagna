@@ -1,17 +1,51 @@
 use std::collections::{HashMap, HashSet};
 
-
 use rsa::RsaPrivateKey;
 use rsa::{sha2::Sha256, RsaPublicKey};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::draw::Draw;
-use crate::{Timeslot, SLOT_LENGTH};
+use crate::Result;
 use crate::{
     block::Block, is_winner, ledger::Ledger, transaction::Transaction, BLOCK_REWARD, ROOT_AMOUNT,
 };
+use crate::{Timeslot, SLOT_LENGTH};
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::sha2::Digest;
+
+#[derive(Error, Debug)]
+pub enum BlockchainError {
+    #[error("Invalid signature")]
+    InvalidSignature,
+    #[error("No parent was found to the block")]
+    OrphanBlock,
+    #[error("Invalid timeslot")]
+    InvalidTimeslot,
+    #[error("Best path not updated")]
+    BestPathNotUpdated,
+    #[error("Invalid best path")]
+    InvalidBestPath,
+    #[error("Invalid genesis block")]
+    InvalidGenesisBlock,
+    #[error("Invalid transaction")]
+    InvalidTransaction,
+    #[error("Hash mismatch")]
+    HashMismatch,
+    #[error("Unable to verify block")]
+    UnableToVerifyBlock,
+    #[error("False winner")]
+    FalseWinner,
+    #[error("Invalid ledger")]
+    InvalidLedger,
+}
+
+impl<T> From<BlockchainError> for Result<T> {
+    fn from(value: BlockchainError) -> Self {
+        Err(crate::Error::BlockchainError(value))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Blockchain {
     pub(super) blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block
@@ -68,10 +102,10 @@ impl Blockchain {
     }
 
     /// Returns whether the new block extends the best path
-    pub fn add_block(&mut self, block: Block) -> bool {
+    pub fn add_block(&mut self, block: Block) -> Result<()> {
         if !block.verify_signature() {
             println!("signature invalid");
-            return false;
+            return BlockchainError::InvalidSignature.into();
         }
         let depth = block.depth as usize;
 
@@ -94,7 +128,7 @@ impl Blockchain {
                 &hex::encode(parent_hash)[0..5],
                 &hex::encode(self.best_path_head.0)[0..5]
             );
-            return false;
+            return BlockchainError::OrphanBlock.into();
         };
 
         // we check the timeslot
@@ -103,7 +137,7 @@ impl Blockchain {
             dbg!(block.timeslot);
             dbg!(parent_block.timeslot);
             dbg!(self.calculate_timeslot());
-            return false;
+            return BlockchainError::InvalidTimeslot.into();
         }
 
         while depth >= self.blocks.len() {
@@ -160,13 +194,16 @@ impl Blockchain {
         // we check if we have any orphans, if we do we must add them after ourself
         if let Some(orphans) = self.orphans.remove(&block_hash) {
             for orphan in orphans {
-                println!("added orphan");
-                self.add_block(orphan.clone());
+                println!("Added orphan, result = {:?}", self.add_block(orphan.clone()));
             }
         }
 
         // return whether the best_path has been updated
-        old_best_path != self.best_path_head.0
+        (old_best_path != self.best_path_head.0)
+            .then_some(())
+            .ok_or(crate::Error::BlockchainError(
+                BlockchainError::BestPathNotUpdated,
+            ))
     }
 
     pub fn get_latest_block(&self) -> &Block {
@@ -262,10 +299,10 @@ impl Blockchain {
     }
 
     /// Verifies that the entire blockchain follows the rules
-    pub fn verify_chain(&self) -> bool {
+    pub fn verify_chain(&self) -> Result<()> {
         if !self.check_best_path() {
             println!("not best path");
-            return false;
+            return BlockchainError::InvalidBestPath.into();
         }
 
         // there must be exactly 1 genesis block
@@ -274,7 +311,7 @@ impl Blockchain {
             if blocks.len() == 1 {
                 (blocks.next().unwrap().hash, 0)
             } else {
-                return false;
+                return BlockchainError::InvalidGenesisBlock.into();
             }
         };
 
@@ -314,23 +351,23 @@ impl Blockchain {
         while let Some((block_hash, depth)) = track_stack.pop() {
             let block = get_block(&(block_hash, depth));
             if block.timeslot <= prev_ts {
-                return false;
+                return BlockchainError::InvalidTimeslot.into();
             }
             prev_ts = block.timeslot;
 
             if block.prev_hash != prev_ptr.0 {
                 println!("hash mishmatch");
-                return false;
+                return BlockchainError::HashMismatch.into();
             }
             if !block.verify_all(&previous_transactions) {
                 println!("block not verified");
-                return false;
+                return BlockchainError::UnableToVerifyBlock.into();
             }
 
             let winner = &block.draw.signed_by;
             if !is_winner(&track_ledger, block.draw.clone(), winner) {
                 println!("false winner");
-                return false;
+                return BlockchainError::FalseWinner.into();
             }
 
             // we process the transactions for the track ledger and they must all be valid
@@ -339,7 +376,7 @@ impl Blockchain {
                 .iter()
                 .all(|t| track_ledger.process_transaction(t))
             {
-                return false;
+                return BlockchainError::InvalidTransaction.into();
             };
 
             track_ledger.reward_winner(winner, BLOCK_REWARD);
@@ -351,15 +388,15 @@ impl Blockchain {
         if !genesis_block.transactions.is_empty()
             || !genesis_block.verify_genesis(&self.root_accounts)
         {
-            return false;
+            return BlockchainError::InvalidGenesisBlock.into();
         }
 
         if self.ledger != track_ledger {
             dbg!("ledger mismatch {:#?}\n{:#?}", &self.ledger, track_ledger);
-            return false;
+            return BlockchainError::InvalidLedger.into();
         }
 
-        true
+        Ok(())
     }
 
     /// checks that the best_path head is the correct one

@@ -39,7 +39,9 @@ impl BlockchainActor {
                 self.blockchain.add_transaction(t.clone());
             }
             AddBlock(b) => {
-                self.blockchain.add_block(b);
+                if let Err(e) = self.blockchain.add_block(b) {
+                    println!("Error when adding block: {:?}", e)
+                }
             }
             CheckBalance(pk) => {
                 let balance = self.blockchain.get_balance(&pk);
@@ -54,12 +56,15 @@ impl BlockchainActor {
                     let block = self
                         .blockchain
                         .get_new_block(draw.clone(), &self.account_sk);
-                    if self.blockchain.add_block(block.clone()) {
-                        self.sending_channel
+                    match self.blockchain.add_block(block.clone()) {
+                        Ok(_) => {
+                            self.sending_channel
                             .send(ClientMessage::Won(block.clone()))
                             .await
                             .unwrap();
-                    }
+                        },
+                        Err(e) => println!("Error when adding block: {:?}", e),
+                    } 
                 } else {
                     //println!("lost a stake whomp whomp");
                 }

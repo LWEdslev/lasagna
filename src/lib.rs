@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use block::Block;
-use blockchain::Blockchain;
+use blockchain::{Blockchain, BlockchainError};
 
 use cli::CliPreTransaction;
 use draw::Draw;
@@ -211,6 +211,8 @@ pub enum Error {
     Pkcs1v15Error,
     #[error("pss error")]
     PssError,
+    #[error("Internal Blockchain error")]
+    BlockchainError(BlockchainError),
 }
 
 pub(crate) fn calculate_timeslot(start_time: u128) -> Timeslot {
@@ -336,7 +338,7 @@ mod tests {
             &sk1,
         );
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
         let transaction_b1_1 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10);
         let transaction_b1_2 = Transaction::new(vk1.clone(), vk3.clone(), &sk1, 10);
@@ -411,9 +413,9 @@ mod tests {
         );
         blockchain.add_block(block_b2_2);
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
-        assert!(blockchain.add_block(block_b2_3));
+        assert!(blockchain.add_block(block_b2_3).is_ok());
 
         // now we check the ledgers state
         assert_eq!(
@@ -425,7 +427,7 @@ mod tests {
             ROOT_AMOUNT + 60
         );
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
     }
 
     #[cfg(feature = "heavy_test")]
@@ -479,7 +481,7 @@ mod tests {
                 tries_vec.iter().sum::<i64>() as f64 / (tries_vec.len() as f64)
             );
             block.sign_and_rehash(&sk);
-            assert!(blockchain.add_block(block));
+            assert!(blockchain.add_block(block).is_ok());
         }
     }
 
@@ -536,25 +538,25 @@ mod tests {
             &sk2,
         );
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
-        assert!(blockchain.add_block(block_b1_1));
+        assert!(blockchain.add_block(block_b1_1).is_ok());
         assert!(blockchain.orphans.is_empty());
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
-        assert!(!blockchain.add_block(block_b2_2));
+        assert!(!blockchain.add_block(block_b2_2).is_ok());
         assert_eq!(blockchain.orphans.len(), 1);
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
-        assert!(blockchain.add_block(block_b2_1));
+        assert!(blockchain.add_block(block_b2_1).is_ok());
         assert!(blockchain.orphans.is_empty());
         assert_eq!(
             blockchain.ledger.get_balance(&vk1.clone().into()),
             ROOT_AMOUNT - 40 - 2 * TRANSACTION_FEE
         );
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
     }
 
     #[test]
@@ -574,14 +576,14 @@ mod tests {
             &sk1,
         );
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
         let zero_map = blockchain.blocks.get_mut(0).unwrap();
         assert_eq!(zero_map.len(), 1);
         let genesis_block = zero_map.get_mut(&blockchain.best_path_head.0).unwrap();
         genesis_block.depth = 1;
 
-        assert!(!blockchain.verify_chain());
+        assert!(!blockchain.verify_chain().is_ok());
     }
 
     #[test]
@@ -601,13 +603,13 @@ mod tests {
             &sk1,
         );
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
 
         let zero_map = blockchain.blocks.get_mut(0).unwrap();
         assert_eq!(zero_map.len(), 1);
         let genesis_block = zero_map.get_mut(&blockchain.best_path_head.0).unwrap();
         genesis_block.transactions = vec![Transaction::new(vk1.clone(), vk1, &sk1, 4)];
-        assert!(!blockchain.verify_chain());
+        assert!(!blockchain.verify_chain().is_ok());
     }
 
     #[cfg(all(feature = "always_win", feature = "max_timeslot"))]
@@ -644,11 +646,11 @@ mod tests {
             }
         }
 
-        assert!(blockchain.add_block(block));
+        assert!(blockchain.add_block(block).is_ok());
 
-        assert!(blockchain.verify_chain());
+        assert!(blockchain.verify_chain().is_ok());
         blockchain.ledger.reward_winner(&vk1, 50);
-        assert!(!blockchain.verify_chain());
+        assert!(!blockchain.verify_chain().is_ok());
     }
 
     #[cfg(not(feature = "always_win"))]
@@ -689,7 +691,7 @@ mod tests {
             }
         }
 
-        assert!(blockchain.verify_chain());
-        assert!(!blockchain.add_block(block));
+        assert!(blockchain.verify_chain().is_ok());
+        assert!(!blockchain.add_block(block).is_ok());
     }
 }
