@@ -9,19 +9,20 @@ use crate::{transaction::Transaction, BLOCK_REWARD, TRANSACTION_FEE};
 pub struct Ledger {
     pub(super) map: HashMap<RsaPublicKey, u64>,
     pub(super) previous_transactions: HashSet<[u8; 32]>,
-}
-
-impl Default for Ledger {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub(super) published_accounts: HashMap<RsaPublicKey, u64>, // maps to depth of publish
 }
 
 impl Ledger {
-    pub fn new() -> Self {
+    pub fn new(root_accounts: Vec<RsaPublicKey>) -> Self {
+        let mut published_accounts = HashMap::new();
+        for acc in root_accounts {
+            published_accounts.insert(acc, 0);
+        }
+
         Self {
             map: HashMap::new(),
             previous_transactions: HashSet::new(),
+            published_accounts,
         }
     }
 
@@ -42,7 +43,8 @@ impl Ledger {
     }
 
     /// Panics if the transaction has been added previously
-    pub fn process_transaction(&mut self, transaction: &Transaction) -> bool {
+    /// depth is the depth of the block where this happens
+    pub fn process_transaction(&mut self, transaction: &Transaction, depth: u64) -> bool {
         if !transaction.verify_signature() {
             return false;
         };
@@ -65,17 +67,26 @@ impl Ledger {
             return false;
         }
 
+        if amount < 1 {
+            return false; 
+        }
+
         *from_balance -= amount + TRANSACTION_FEE;
         let to_balance = self.map.get_mut(to).unwrap();
 
         *to_balance += amount;
+
+        // check if this is an account publication
+        if self.published_accounts.contains_key(to) {
+            self.published_accounts.insert(to.clone(), depth);
+        }
 
         true
     }
 
     /// Reverse the transaction
     /// panics if the transaction was not performed
-    pub fn rollback_transaction(&mut self, transaction: &Transaction) {
+    pub fn rollback_transaction(&mut self, transaction: &Transaction, depth: u64) {
         let from: &RsaPublicKey = &transaction.from;
         let to: &RsaPublicKey = &transaction.to;
         let amount = transaction.amount;
@@ -87,8 +98,18 @@ impl Ledger {
         *from_balance += amount + TRANSACTION_FEE;
         let to_balance = self.map.get_mut(to).unwrap();
         *to_balance -= amount;
+
+        // check if this transaction is an account publication
+        // if it is we remove it from the publications
+        if let Some(published_at) = self.published_accounts.get(to) {
+            let published_at = *published_at;
+            if published_at == depth {
+                self.published_accounts.remove(to);
+            }
+        }
     }
 
+    /// TODO maintain this in a variable instead
     pub fn get_total_money_in_ledger(&self) -> u64 {
         self.map.values().sum()
     }

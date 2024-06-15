@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::seeding_mechanism::SeedContent;
 use crate::PssSignature;
 use crate::{draw::Draw, transaction::Transaction, Timeslot};
 use rsa::RsaPrivateKey;
@@ -29,8 +30,9 @@ impl Block {
         winner: RsaPublicKey,
         transactions: Vec<Transaction>,
         sk: &RsaPrivateKey,
+        seed: SeedContent,
     ) -> Self {
-        let draw = Draw::new(timeslot, winner.clone(), sk, prev_hash);
+        let draw = Draw::new(timeslot, seed, winner.clone(), sk);
         let fields_string =
             Block::combine_fields_to_string(&timeslot, &prev_hash, depth, &draw, &transactions);
         let mut hasher = Sha256::new();

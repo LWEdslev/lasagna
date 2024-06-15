@@ -52,10 +52,12 @@ impl BlockchainActor {
             }
             Stake => {
                 let draw = self.blockchain.get_draw(&self.account_sk);
-                if self.blockchain.stake(draw.clone(), &self.account) {
+                let prev_hash = self.blockchain.get_best_hash();
+                let new_depth = self.blockchain.best_path_head().1 + 1;
+                if self.blockchain.stake(draw.clone(), &self.account, new_depth) {
                     let block = self
                         .blockchain
-                        .get_new_block(draw.clone(), &self.account_sk);
+                        .get_new_block(prev_hash, draw.clone(), &self.account_sk);
                     match self.blockchain.add_block(block.clone()) {
                         Ok(_) => {
                             self.sending_channel
