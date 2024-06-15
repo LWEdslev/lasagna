@@ -52,13 +52,19 @@ impl<T> From<BlockchainError> for Result<T> {
     }
 }
 
+impl From<BlockchainError> for crate::Error {
+    fn from(value: BlockchainError) -> Self {
+        crate::Error::BlockchainError(value)
+    }
+}
+
 pub type BlockPtr = ([u8; 32], u64);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Blockchain {
     pub(super) blocks: Vec<HashMap<[u8; 32], Block>>, // at index i all blocks at depth i exists in a map from their hash to the block
-    pub(super) best_path: Vec<BlockPtr>, // best path
-    pub(super) ledger: Ledger,                  // this should follow the best_path_heads state
+    pub(super) best_path: Vec<BlockPtr>,              // best path
+    pub(super) ledger: Ledger, // this should follow the best_path_heads state
     pub(super) root_accounts: Vec<RsaPublicKey>,
     pub(super) orphans: HashMap<[u8; 32], Vec<Block>>, // maps from the parent that they have which is not in blocks
     pub(super) transaction_buffer: HashSet<Transaction>,
@@ -118,6 +124,72 @@ impl Blockchain {
         self.best_path.last().expect("unreachable")
     }
 
+    fn check_seed(&self, block: &Block) -> bool {
+        let depth = block.depth as u64;
+
+        let seed_age = || depth as u64 - block.draw.seed.block_ptr.1; // closure to evaluate lazily
+                                                                      // check that the seed is ok
+        if depth < MAX_SEED_AGE as _ && depth > 0 {
+            // if we are close to genesis we must have same seed as genesis block
+            if block.draw.seed != self.get_block(&self.best_path[0]).unwrap().draw.seed {
+                eprintln!("we do not have the same seed as the genesis block");
+                return false;
+            }
+        } else if seed_age() > MIN_SEED_AGE && seed_age() <= MAX_SEED_AGE {
+            // in range, we must check if seed matches previous
+            let prev_block = self.get_block(&self.best_path[depth as usize - 1]).unwrap();
+            if block.draw.seed != prev_block.draw.seed {
+                eprintln!("block does not match previous at depth {}", depth);
+                eprintln!(
+                    "({},{}){}) seed_age = {}",
+                    hex::encode(block.draw.seed.block_ptr.0),
+                    block.draw.seed.block_ptr.1,
+                    hex::encode(block.draw.seed.seed),
+                    seed_age()
+                );
+                eprintln!(
+                    "prev ({},{}){})",
+                    hex::encode(prev_block.draw.seed.block_ptr.0),
+                    prev_block.draw.seed.block_ptr.1,
+                    hex::encode(prev_block.draw.seed.seed)
+                );
+                return false;
+            }
+        } else if seed_age() == MIN_SEED_AGE {
+            // on lower border, we must check if it is MIN_SEED_AGE back
+            // we must check that the hash of the draw MIN_SEED_AGE back is the seed
+            let old_block = self
+                .get_block(&self.best_path[(depth - (MIN_SEED_AGE)) as usize])
+                .unwrap();
+            if block.draw.seed
+                != SeedContent::new((old_block.hash, old_block.depth), old_block.draw.hash())
+            {
+                eprintln!("seed does not match MIN_SEED_AGE blocks back");
+                eprintln!(
+                    "comparing ({}) with ({}) at depth {}",
+                    block.draw.seed.block_ptr.1, old_block.depth, block.depth
+                );
+                return false;
+            }
+        } else {
+            // check genesis
+            let genesis_seed = Self::produce_root_seed(&self.root_accounts);
+            if !(depth == 0 && block.draw.seed.seed == genesis_seed) {
+                eprintln!(
+                    "out of range seed {} depth {} genesis_seed {} seed_age {}",
+                    hex::encode(block.draw.seed.seed),
+                    depth,
+                    hex::encode(genesis_seed),
+                    seed_age()
+                );
+                // out of range, this is always invalid (if not genesis)
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Returns whether the new block extends the best path
     pub fn add_block(&mut self, block: Block) -> Result<()> {
         if !block.verify_signature() {
@@ -157,49 +229,9 @@ impl Blockchain {
             return BlockchainError::InvalidTimeslot.into();
         }
 
-        let seed_age = || {depth as u64 - block.draw.seed.block_ptr.1}; // closure to evaluate lazily
-        // check that the seed is ok
-        if depth < MAX_SEED_AGE as _ && depth > 0 {
-            // if we are close to genesis we must have same seed as genesis block
-            if block.draw.seed != self.get_block(&self.best_path[0]).unwrap().draw.seed {
-                eprintln!("we do not have the same seed as the genesis block");
-                return BlockchainError::InvalidSeed.into();
-            }
-        } else if seed_age() > MIN_SEED_AGE + 1 && seed_age() <= MAX_SEED_AGE {
-            // in range, we must check if seed matches previous
-            let prev_block = self.get_block(&self.best_path[depth - 1]).unwrap();
-            if block.draw.seed != prev_block.draw.seed {
-                eprintln!("block does not match previous at depth {}", depth);
-                eprintln!("({},{}){}) seed_age = {}", hex::encode(block.draw.seed.block_ptr.0), block.draw.seed.block_ptr.1,
-                    hex::encode(block.draw.seed.seed), seed_age());
-                eprintln!("prev ({},{}){})", hex::encode(prev_block.draw.seed.block_ptr.0), prev_block.draw.seed.block_ptr.1,
-                hex::encode(prev_block.draw.seed.seed));
-                return BlockchainError::InvalidSeed.into();
-            }
-        } else if seed_age() == MIN_SEED_AGE + 1 {
-            // on lower border, we must check if it is MIN_SEED_AGE back
-            // we must check that the hash of the draw MIN_SEED_AGE back is the seed
-            let old_block = self
-                .get_block(&self.best_path[depth - (MIN_SEED_AGE + 1) as usize])
-                .unwrap();
-            if block.draw.seed
-                != SeedContent::new((old_block.hash, old_block.depth), old_block.draw.hash())
-            {
-                eprintln!("seed does not match MIN_SEED_AGE blocks back");
-                eprintln!("comparing ({}) with ({}) at depth {}",
-                 block.draw.seed.block_ptr.1, old_block.depth, block.depth);
-                return BlockchainError::InvalidSeed.into();
-            }
-        } else {
-            // check genesis
-            let genesis_seed = Self::produce_root_seed(&self.root_accounts);
-            if !(depth == 0 && block.draw.seed.seed == genesis_seed) { 
-                eprintln!(
-                    "out of range seed {} depth {} genesis_seed {} seed_age {}", 
-                    hex::encode(block.draw.seed.seed), depth, hex::encode(genesis_seed), seed_age());
-                // out of range, this is always invalid (if not genesis)
-                return BlockchainError::InvalidSeed.into();
-            }
+        // check the seed
+        if !self.check_seed(&block) {
+            return BlockchainError::InvalidSeed.into();
         }
 
         while depth >= self.blocks.len() {
@@ -360,78 +392,11 @@ impl Blockchain {
     }
 
     fn verify_seeds(&self) -> Result<()> {
-        // We must walk through the best path,
-        //   and verify that the seeds follow the rules
-
-        // First we gather the best path by walking backwards through it
-        // TODO consider if this should be maintained in the blockchain instead
-        let mut block = self
-            .get_best_block();
-        let mut buffer = vec![(block.hash, block.depth)];
-        while block.depth > 0 {
-            let parent = self
-                .get_parent(block)
-                .ok_or(crate::Error::BlockchainError(BlockchainError::EmptyChain))?;
-            buffer.push((block.hash, block.depth));
-            block = parent;
-        }
-
-        // now we have in the buffer all block in the best path
-        // the latest block i leftmost
-        // now we can walk through the stack and check that the seed develops as expected
-        buffer.reverse();
-        let best_path = buffer;
-
-        let genesis_seed = Self::produce_root_seed(&self.root_accounts);
-
-        for (i, (ptr, depth)) in best_path.iter().enumerate() {
-            let (ptr, depth) = (*ptr, *depth);
-            let block = self.get_block(&(ptr, depth)).unwrap();
-            if depth < MAX_SEED_AGE && i > 0 {
-                // if we are close to genesis we must have same seed as genesis block
-                if block.draw.seed != self.get_block(&best_path[0]).unwrap().draw.seed {
-                    eprintln!("we do not have the same seed as the genesis block");
-                    return BlockchainError::InvalidSeed.into();
-                }
-
-                continue;
-            }
-
-            let seed_age = i as u64 - block.draw.seed.block_ptr.1;
-
-            // 3 cases. 1: age is in range, 2: age is on lower border, 3: age is out of range
-            if seed_age > MIN_SEED_AGE && seed_age <= MAX_SEED_AGE {
-                // in range, we must check if seed matches previous
-                let prev_block = self.get_block(&best_path[i - 1]).unwrap();
-                if block.draw.seed != prev_block.draw.seed {
-                    eprintln!("block does not match previous");
-                    eprintln!("({},{}){})", hex::encode(block.draw.seed.block_ptr.0), block.draw.seed.block_ptr.1,
-                    hex::encode(block.draw.seed.seed));
-                    return BlockchainError::InvalidSeed.into();
-                }
-            } else if seed_age == MIN_SEED_AGE {
-                // on lower border, we must check if it is MIN_SEED_AGE back
-                // we must check that the hash of the draw MIN_SEED_AGE back is the seed
-                let old_block = self
-                    .get_block(&best_path[i - (MIN_SEED_AGE + 1) as usize])
-                    .unwrap();
-                if block.draw.seed
-                    != SeedContent::new((old_block.hash, old_block.depth), old_block.draw.hash())
-                {
-                    eprintln!("seed does not match MIN_SEED_AGE blocks back");
-                    eprintln!("comparing (({},{}){}) with (({},{}){})"
-                    , hex::encode(block.draw.seed.block_ptr.0), block.draw.seed.block_ptr.1,
-                    hex::encode(block.draw.seed.seed),
-                    hex::encode(old_block.hash), old_block.depth, hex::encode(old_block.draw.hash()));
-                    return BlockchainError::InvalidSeed.into();
-                }
-            } else {
-                // check genesis
-                if i == 0 && block.draw.seed.seed == genesis_seed { continue }
-                eprintln!(
-                    "out of range seed {} i {} genesis_seed {} seed_age {}", 
-                    hex::encode(block.draw.seed.seed), i, hex::encode(genesis_seed), seed_age);
-                // out of range, this is always invalid (if not genesis)
+        for ptr in self.best_path.iter() {
+            let block = self
+                .get_block(ptr)
+                .ok_or::<crate::Error>(BlockchainError::InvalidSeed.into())?;
+            if !self.check_seed(block) {
                 return BlockchainError::InvalidSeed.into();
             }
         }
@@ -597,8 +562,7 @@ impl Blockchain {
     }
 
     fn get_next_seed(&self) -> SeedContent {
-        let best_block = self
-            .get_best_block();
+        let best_block = self.get_best_block();
         let seed_content = best_block.draw.seed.clone();
 
         let seed_age = best_block.depth - seed_content.block_ptr.1;
@@ -610,7 +574,9 @@ impl Blockchain {
 
         // seed >= 100 so we pick a new seed
         // we do this by walking 50 back from our best block
-        let block = self.get_block(&self.best_path[(best_block.depth - MIN_SEED_AGE) as usize]).unwrap();
+        let block = self
+            .get_block(&self.best_path[(best_block.depth - MIN_SEED_AGE + 1) as usize])
+            .unwrap();
 
         SeedContent {
             block_ptr: (block.hash, block.depth),
@@ -655,11 +621,17 @@ impl Blockchain {
 impl Blockchain {
     // Keeps mining until winning, since this is a test it will be fast
     // A timeslot is only 0.001 ms when testing
-    fn produce_new_block_on_best_path(&mut self, sk: &RsaPrivateKey, max_attempts: u64) -> Result<()> {
+    fn produce_new_block_on_best_path(
+        &mut self,
+        sk: &RsaPrivateKey,
+        max_attempts: u64,
+    ) -> Result<()> {
         let wallet = sk.to_public_key();
         let mut attempts = 1;
         let mut draw = self.get_draw(sk);
-        while !self.stake(draw.clone(), &wallet, self.best_path_head().1 + 1) && attempts < max_attempts {
+        while !self.stake(draw.clone(), &wallet, self.best_path_head().1 + 1)
+            && attempts < max_attempts
+        {
             draw = self.get_draw(sk);
             attempts += 1;
         }
@@ -673,16 +645,35 @@ mod tests {
     use super::*;
 
     fn create_dummy_blockchain() -> (Blockchain, Vec<RsaPrivateKey>) {
-        let k1 = crate::cli::key_from_seedphrase(&Zeroizing::new("abstract gap pumpkin exchange crawl rapid grief glad private people popular harsh".into())).unwrap();
-        let k2 = crate::cli::key_from_seedphrase(&Zeroizing::new("hole fall spin vote bracket relax dolphin trumpet trick elbow wise force".into())).unwrap();
-        let k3 = crate::cli::key_from_seedphrase(&Zeroizing::new("shell peasant gorilla disorder state gate worth narrow afford liar pilot evil".into())).unwrap();
-        let k4 = crate::cli::key_from_seedphrase(&Zeroizing::new("abstract gap pumpkin exchange crawl rapid grief glad private people popular harsh".into())).unwrap();
+        let k1 = crate::cli::key_from_seedphrase(&Zeroizing::new(
+            "abstract gap pumpkin exchange crawl rapid grief glad private people popular harsh"
+                .into(),
+        ))
+        .unwrap();
+        let k2 = crate::cli::key_from_seedphrase(&Zeroizing::new(
+            "hole fall spin vote bracket relax dolphin trumpet trick elbow wise force".into(),
+        ))
+        .unwrap();
+        let k3 = crate::cli::key_from_seedphrase(&Zeroizing::new(
+            "shell peasant gorilla disorder state gate worth narrow afford liar pilot evil".into(),
+        ))
+        .unwrap();
+        let k4 = crate::cli::key_from_seedphrase(&Zeroizing::new(
+            "abstract gap pumpkin exchange crawl rapid grief glad private people popular harsh"
+                .into(),
+        ))
+        .unwrap();
 
-        let root_accounts = vec![k1.to_public_key(), k2.to_public_key(), k3.to_public_key(), k4.to_public_key()];
+        let root_accounts = vec![
+            k1.to_public_key(),
+            k2.to_public_key(),
+            k3.to_public_key(),
+            k4.to_public_key(),
+        ];
 
         let blockchain = Blockchain::start(root_accounts, &k1);
 
-        (blockchain, vec![k1,k2,k3,k4])
+        (blockchain, vec![k1, k2, k3, k4])
     }
 
     #[test]
@@ -691,10 +682,13 @@ mod tests {
 
         let max_attempts = 200;
 
-        assert_eq!(blockchain.produce_new_block_on_best_path(&keys[0], max_attempts), Ok(()));
+        assert_eq!(
+            blockchain.produce_new_block_on_best_path(&keys[0], max_attempts),
+            Ok(())
+        );
         assert_eq!(blockchain.verify_chain(), Ok(()));
         assert_eq!(blockchain.verify_seeds(), Ok(()));
-    }       
+    }
 
     #[test]
     fn produce_max_age_blocks() {
@@ -704,7 +698,10 @@ mod tests {
 
         for i in 0..(MAX_SEED_AGE + 2) {
             eprintln!("iter i {i}");
-            assert_eq!(blockchain.produce_new_block_on_best_path(&keys[0], max_attempts), Ok(()));
+            assert_eq!(
+                blockchain.produce_new_block_on_best_path(&keys[0], max_attempts),
+                Ok(())
+            );
             assert_eq!(blockchain.verify_chain(), Ok(()));
             assert_eq!(blockchain.verify_seeds(), Ok(()));
         }
